@@ -44,8 +44,22 @@ def archive_re(ts, url):
     return "^" + re.escape(f"https://web.archive.org/web/{ts}id_/{url}") + "$"
 
 
-def mock_get(vm, url, body=b"", ts=T1, status=200, location=None):
+MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+NO_MEMENTO = object()
+
+
+def memento(ts):
+    """The Memento-Datetime header the Wayback Machine sends with a capture taken at ts."""
+    return f"Fri, {ts[6:8]} {MONTHS[int(ts[4:6]) - 1]} {ts[0:4]} {ts[8:10]}:{ts[10:12]}:{ts[12:14]} GMT"
+
+
+def mock_get(vm, url, body=b"", ts=T1, status=200, location=None, captured=None):
+    """A Wayback id_ answer. A 200 carries memento-datetime of `captured` (default: ts),
+    as the real archive does; captured=NO_MEMENTO drops it, a str is sent as is."""
     headers = {"location": location.encode()} if location else {}
+    if status == 200 and captured is not NO_MEMENTO:
+        value = captured if isinstance(captured, str) and not captured.isdigit() else memento(captured or ts)
+        headers["memento-datetime"] = value.encode()
     vm.mock_web(archive_re(ts, url), {"method": "GET", "response": {"status": status, "headers": headers, "body": body}})
 
 
@@ -489,3 +503,111 @@ def test_demo_a_to_d_amounts(direct_vm, contract, direct_alice, direct_bob, ledg
     assert contract.withdraw() == 22 * GEN // 100
     assert transfers == [(to_hex(direct_bob), 22 * GEN // 100)]
     check_solvency(contract, ledger, transfers)
+
+
+# v1.1: the node may follow Wayback redirects itself --------------------------------------
+# On Studionet gl.nondet.web.get returned the final 200 of a redirect (demo case C): the
+# capture time is read from memento-datetime, checked against the window, and stored.
+
+def test_followed_redirect_to_a_capture_after_the_start(direct_vm, demo, direct_bob, ledger, transfers, prompts):
+    contract = demo
+    mock_get(direct_vm, URL_C, V2_MUG, ts=TS_C, captured=C_CAPTURE)  # 200, bytes of the later capture
+    challenge(direct_vm, contract, direct_bob, ledger, 2, ts=TS_C)
+    assert contract.resolve(0) == "EVIDENCE_NOT_FOUND"
+    c = info(contract, 0)
+    assert c["reason"] == "[EXTERNAL] capture not in window"
+    assert (c["judged_ts"], c["page_sha256"], c["observed_price"]) == ("", "", "")
+    assert prompts == []
+    assert contract.promo_status(2) == "LIVE"
+    assert int(json.loads(contract.get_pledge(0))["bond"]) == BOND5 + STAKE
+    check_solvency(contract, ledger, transfers)
+
+
+def test_missing_capture_time_needs_no_llm(direct_vm, demo, direct_bob, ledger, transfers, prompts):
+    contract = demo
+    mock_get(direct_vm, URL_A, V1["bouilloire"], captured=NO_MEMENTO)
+    mock_reading(direct_vm, URL_A, "29.90")
+    challenge(direct_vm, contract, direct_bob, ledger, 0)
+    assert contract.resolve(0) == "EVIDENCE_NOT_FOUND"
+    assert info(contract, 0)["reason"] == "[EXTERNAL] capture time unknown"
+    assert prompts == []
+    check_solvency(contract, ledger, transfers)
+
+
+@pytest.mark.parametrize("value", [
+    "05 Nov 2026 10:00:00 GMT",          # no weekday
+    "Thu, 05 Nov 2026 10:00:00 UTC",     # not GMT
+    "Thu, 5 Nov 2026 10:00:00 GMT",      # one-digit day
+    "Thu, 05 Foo 2026 10:00:00 GMT",     # unknown month
+    "Thu, 05 obN 2026 10:00:00 GMT",     # letters across two month names
+    "Mon, 30 Feb 2026 10:00:00 GMT",     # impossible date
+    "Thu, 05 Nov 2026 25:00:00 GMT",     # impossible hour
+    "20261105100000",                    # a timestamp, not an HTTP date
+])
+def test_malformed_capture_time_needs_no_llm(direct_vm, demo, direct_bob, ledger, transfers, prompts, value):
+    contract = demo
+    headers = {"memento-datetime": value.encode()}
+    direct_vm.mock_web(archive_re(T1, URL_A), {"method": "GET", "response": {"status": 200, "headers": headers, "body": V1["bouilloire"]}})
+    mock_reading(direct_vm, URL_A, "29.90")
+    challenge(direct_vm, contract, direct_bob, ledger, 0)
+    assert contract.resolve(0) == "EVIDENCE_NOT_FOUND"
+    assert info(contract, 0)["reason"] == "[EXTERNAL] capture time unknown"
+    assert prompts == []
+    check_solvency(contract, ledger, transfers)
+
+
+def test_capture_time_inside_the_window_is_judged_and_stored(direct_vm, demo, direct_bob, ledger, transfers, prompts):
+    contract = demo
+    real = "20261105093000"  # the node followed a redirect to an earlier capture, still in the window
+    direct_vm.mock_web(archive_re(T1, URL_A), {"method": "GET", "response": {
+        "status": 200, "headers": {"Memento-Datetime": b"Thu, 05 NOV 2026 09:30:00 GMT"}, "body": V1["bouilloire"]}})
+    mock_reading(direct_vm, URL_A, "29.90")
+    challenge(direct_vm, contract, direct_bob, ledger, 0)
+    assert contract.resolve(0) == "UPHELD"
+    c = info(contract, 0)
+    assert (c["snapshot_ts"], c["judged_ts"], c["observed_price"]) == (T1, real, "29.90")
+    assert "Wayback Machine capture of 2026-11-05 09:30:00 UTC" in prompts[0]
+    check_solvency(contract, ledger, transfers)
+
+
+def test_judged_capture_time_blocks_a_replay(direct_vm, demo, direct_bob, ledger, transfers):
+    contract = demo
+    real = "20261105093000"
+    mock_get(direct_vm, URL_B, V1["theiere"], captured=real)
+    mock_reading(direct_vm, URL_B, "39.90")
+    challenge(direct_vm, contract, direct_bob, ledger, 1)
+    assert contract.resolve(0) == "REJECTED"
+    assert info(contract, 0)["judged_ts"] == real
+    for ts in (T1, real):
+        assert contract.preview_challenge(1, ts, to_hex(direct_bob), str(STAKE)) == "[EXPECTED] this capture was already judged for this promo"
+    check_solvency(contract, ledger, transfers)
+
+
+@pytest.mark.parametrize("captured, reason", [
+    ("20261120000000", "[EXTERNAL] image capture not in window"),
+    (NO_MEMENTO, "[EXTERNAL] image capture time unknown"),
+])
+def test_image_capture_time_is_checked_too(direct_vm, demo, direct_bob, ledger, transfers, prompts, captured, reason):
+    contract = demo
+    mock_get(direct_vm, URL_E, V1["radio"])
+    mock_get(direct_vm, IMAGE_E, PNG, captured=captured)
+    challenge(direct_vm, contract, direct_bob, ledger, 4, image_url=IMAGE_E)
+    assert contract.resolve(0) == "EVIDENCE_NOT_FOUND"
+    assert info(contract, 0)["reason"] == reason
+    assert prompts == []
+    check_solvency(contract, ledger, transfers)
+
+
+def test_validator_compares_the_capture_time(direct_vm, demo, direct_bob, ledger, transfers):
+    contract = demo
+    mock_get(direct_vm, URL_A, V1["bouilloire"])
+    mock_reading(direct_vm, URL_A, "29.90")
+    challenge(direct_vm, contract, direct_bob, ledger, 0)
+    contract.resolve(0)
+    direct_vm.clear_mocks()
+    mock_get(direct_vm, URL_A, V1["bouilloire"], captured="20261105100001")  # same bytes, other capture
+    mock_reading(direct_vm, URL_A, "29.90")
+    assert direct_vm.run_validator() is False
+    direct_vm.clear_mocks()
+    mock_get(direct_vm, URL_A, V1["bouilloire"], captured=C_CAPTURE)
+    assert direct_vm.run_validator(leader_error=Exception("[EXTERNAL] capture not in window")) is True

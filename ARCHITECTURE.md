@@ -56,8 +56,8 @@ is stored: only URLs, timestamps and hashes.
 
 ## Size
 
-`contracts/was_price.py` is 39,713 bytes (target < 40,000, a margin target, not a documented
-limit). To get there without behavior changes the file uses tab indentation (as the GenLayer
+`contracts/was_price.py` is 39,907 bytes in v1.1.0 (39,713 in v1.0.0; target < 40,000, a
+margin target, not a documented limit). To get there without behavior changes the file uses tab indentation (as the GenLayer
 SDK sources do) and non-essential comments were removed (cut 1 of the size plan). Cuts 2 to 4
 (`promo_window` moved to the client, hints reduced to JSON-LD, image path removed) were not
 needed.
@@ -103,8 +103,10 @@ Read on docs.genlayer.com on 2026-11-13, and exercised by the direct tests (genl
 - Verified on 2026-11-13 (demo case C): a Wayback `id_` request for a timestamp without an
   exact capture answers a 302 to the nearest capture, but `gl.nondet.web.get` on Studionet
   follows it and returns the final 200, so the contract never sees the redirect. v1.0.0
-  therefore misses the window check after a redirect; see docs/evidence.md for the impact and
-  the `memento-datetime` fix.
+  therefore missed the window check after a redirect (docs/evidence.md). v1.1.0 reads the
+  `Memento-Datetime` header of the returned capture (page and image), checks it against the
+  window, stores it as `judged_ts`, and settles EVIDENCE_NOT_FOUND without an LLM call when
+  it is missing or unreadable.
 - TODO(verify): the Wayback Machine serves the same capture to 5 validators without rate
   limiting (no problem seen on GreenClaim Bond; not documented).
 - TODO(verify): the delay between a Save Page Now and the capture being readable in `id_`

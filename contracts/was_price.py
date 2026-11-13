@@ -10,8 +10,7 @@ import re
 import unicodedata
 from urllib.parse import urljoin
 
-# Error classes: EXPECTED/EXTERNAL must match exactly between validators, TRANSIENT agrees
-# when both sides are transient, LLM_ERROR never agrees (rotation).
+# EXPECTED/EXTERNAL: exact match; TRANSIENT: both transient; LLM_ERROR: never agrees.
 ERROR_EXPECTED = "[EXPECTED]"
 ERROR_EXTERNAL = "[EXTERNAL]"
 ERROR_TRANSIENT = "[TRANSIENT]"
@@ -139,6 +138,8 @@ _LD_PRICE_RE = re.compile(r"\"price\"\s*:\s*\"?([0-9][0-9 .,]*)")
 _HINT_RE = re.compile(r"([0-9]{1,7})(?:\.([0-9]{1,2}))?")
 _WAYBACK_RE = re.compile(r"https?://web\.archive\.org/web/([0-9]{14})id_/(\S+)", re.I)
 _KEY_RE = re.compile(r"(?:https?://)?([^/?#]+)(.*)", re.I)
+_MEMENTO_RE = re.compile(r"[A-Za-z]{3}, ([0-9]{2}) ([A-Za-z]{3}) ([0-9]{4}) ([0-9]{2}):([0-9]{2}):([0-9]{2}) GMT")
+_MONTHS = "JanFebMarAprMayJunJulAugSepOctNovDec"
 _VOID = ("img", "input", "br", "hr", "meta", "link", "source", "area", "wbr", "embed")
 _SAME_KEYS = ("judged_ts", "page_sha256", "image_ts", "image_sha256",
 			  "product_match", "price_found", "observed_cents", "currency")
@@ -388,7 +389,6 @@ def _is_image(b: bytes) -> bool:
 
 
 def _neutralize(text: str) -> str:
-	# Page data cannot open or close prompt tags; control characters except \n are dropped.
 	text = text.replace("<", "‹").replace(">", "›")
 	return "".join(ch for ch in text if ch == "\n" or unicodedata.category(ch) != "Cc")
 
@@ -488,6 +488,14 @@ def _header(headers: dict, name: str) -> str:
 	return ""
 
 
+def _memento_ts(v: str) -> str:
+	# "Fri, 13 Nov 2026 17:26:14 GMT" -> "20261113172614"; "" if unreadable.
+	m = _MEMENTO_RE.fullmatch(v.strip())
+	mo = _MONTHS.find(m.group(2).title()) if m else -1
+	t = _dt(int(m.group(3)), mo // 3 + 1, *(int(m.group(i)) for i in (1, 4, 5, 6))) if mo >= 0 and mo % 3 == 0 else None
+	return "" if t is None else _ts14(t)
+
+
 def _page_key(url: str) -> str:
 	m = _KEY_RE.fullmatch(url.strip())
 	host = re.sub(r":(80|443)$", "", m.group(1).lower()) if m else url.lower()
@@ -495,7 +503,6 @@ def _page_key(url: str) -> str:
 
 
 def _same_reading(leader: object, mine: dict) -> bool:
-	# Strict equality of the decision fields; reason and struck are never compared.
 	return isinstance(leader, dict) and all(
 		type(leader.get(k)) is type(mine[k]) and leader.get(k) == mine[k] for k in _SAME_KEYS)
 
@@ -526,8 +533,6 @@ def _web_get(url: str):
 
 
 def _fetch(ts: str, url: str, lo: str, hi: str, image: bool) -> tuple[bytes, str]:
-	# GET <ts>id_/<url>; at most 2 redirects, only to a capture of the same URL inside
-	# [lo, hi). 14-digit strings: lexicographic order is chronological order.
 	what, cap = ("image", "image capture") if image else ("page", "capture")
 	target = ARCHIVE + ts + "id_/" + url
 	for _hop in range(MAX_REDIRECTS + 1):
@@ -551,6 +556,12 @@ def _fetch(ts: str, url: str, lo: str, hi: str, image: bool) -> tuple[bytes, str
 			raise _ext(f"{what} not archived")
 		if status < 200 or status >= 300:
 			raise _ext(f"unexpected archive status {status}")
+		# Nodes may follow redirects: check the time of the capture returned.
+		ts = _memento_ts(_header(getattr(resp, "headers", None) or {}, "memento-datetime"))
+		if ts == "":
+			raise _ext(f"{cap} time unknown")
+		if not lo <= ts < hi:
+			raise _ext(f"{cap} not in window")
 		body = resp.body or b""
 		if len(body) > (MAX_IMAGE_BYTES if image else MAX_PAGE_BYTES):
 			raise _ext(f"{what} too large")
@@ -709,7 +720,6 @@ class WasPrice(gl.Contract):
 		return "", image
 
 	def _settle(self, challenge_id: int, status: str, reason: str) -> None:
-		# Pull model: amounts go to credits, withdraw() transfers them.
 		c = self.challenges[u256(challenge_id)]
 		promo = self.promos[c.promo_id]
 		p = self.pledges[promo.pledge_id]
@@ -792,7 +802,6 @@ class WasPrice(gl.Contract):
 		return self._file(promo_id, snapshot_ts, IMAGE, image_url)
 
 	def _file(self, promo_id: int, snapshot_ts: str, kind: str, image_url: str) -> int:
-		# No web or LLM call here: the capture is read in resolve().
 		stake, sender, now = int(gl.message.value), gl.message.sender_address, _now()
 		err, image = self._check_challenge(promo_id, snapshot_ts, kind, image_url, sender, stake, now)
 		if err != "":
@@ -848,7 +857,6 @@ class WasPrice(gl.Contract):
 			self._settle(challenge_id, EVIDENCE_NOT_FOUND, msg[i:])
 			return EVIDENCE_NOT_FOUND
 
-		# Deterministic decision, outside the non-deterministic block.
 		c.judged_ts = _valid(r.get("judged_ts"), _TS14_RE)
 		c.page_sha256 = _valid(r.get("page_sha256"), _SHA_RE)
 		c.image_ts = _valid(r.get("image_ts"), _TS14_RE)

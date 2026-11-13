@@ -105,7 +105,10 @@ OPEN stakes + `total_credits`.
 
 1. fetch `https://web.archive.org/web/<snapshot_ts>id_/<product_url>` (original bytes); a
    301/302/307/308 is followed (2 at most) only to `web/<ts2>id_/<same URL>` with `ts2` in the
-   window, else `[EXTERNAL] capture not in window` or `capture is another url`;
+   window, else `[EXTERNAL] capture not in window` or `capture is another url`. Nodes may
+   follow redirects themselves (Studionet does), so the capture actually returned must carry a
+   `Memento-Datetime` header inside the window; that time is stored as `judged_ts`. A missing or
+   unreadable header gives `[EXTERNAL] capture time unknown`, without any LLM call (v1.1);
 2. structured price hints (JSON-LD `price`, `itemprop="price"`, `product:price:amount`,
    `og:price:amount`) are read before cleaning and passed as untrusted hints;
 3. scripts, styles, `noscript`, `template`, comments and hidden elements (`hidden`,
@@ -134,7 +137,7 @@ REJECTED.
 | Prefix | Meaning | Validators |
 |---|---|---|
 | `[EXPECTED]` | usage error (deterministic) | must match exactly |
-| `[EXTERNAL]` | archive 4xx, capture outside the window, other URL, image not referenced | must match exactly; settles EVIDENCE_NOT_FOUND |
+| `[EXTERNAL]` | archive 4xx, capture outside the window or of unknown time, other URL, image not referenced | must match exactly; settles EVIDENCE_NOT_FOUND |
 | `[TRANSIENT]` | network, 408/425/429/5xx | agree if both transient; the challenge stays OPEN |
 | `[LLM_ERROR]` | unusable model answer | always disagree (rotation); the challenge stays OPEN |
 
@@ -162,6 +165,9 @@ REJECTED.
   check; `standing` can make that visible.
 - Prices rendered only by JavaScript, or that differ by country or session, are not seen.
 - Hidden-element removal is best effort, by regex, without external CSS.
+- When a node follows a Wayback redirect itself, the contract checks the time of the capture
+  returned (`Memento-Datetime`), not its URL; Wayback redirects an `id_` request to a capture
+  of the same URL.
 - National exceptions (perishable goods, progressive reductions, new products) are not handled.
 - EUR only.
 - At most 2 images per prompt (platform limit); one is used.
@@ -232,8 +238,9 @@ Studionet, 2026-11-13, contract
 **Known issue in v1.0.0 (case C).** On Studionet `gl.nondet.web.get` follows the Wayback
 redirect itself and returns the final capture, so the contract never sees the `302` and its
 window check on redirects does not run: the post-start capture of case C was read and upheld.
-The fix (check the `memento-datetime` header of the capture actually returned) is described
-in [docs/evidence.md](docs/evidence.md#case-c-a-finding); it is not deployed.
+The fix (check the `memento-datetime` header of the capture actually returned) is in
+`v1.1.0`; see [docs/evidence.md](docs/evidence.md#case-c-a-finding). Its redeployment and the
+replay of case C are recorded there once done.
 
 ## License
 
