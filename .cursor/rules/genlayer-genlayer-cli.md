@@ -43,8 +43,7 @@ genlayer account use dev1               # Set active account
 genlayer account unlock                 # Cache key in OS keychain (no password prompts)
 genlayer account lock                   # Remove from keychain
 
-# Import from private key or keystore
-genlayer account import --name imported --private-key 0x...
+# Import (this project: the user imports accounts alone, with the hidden prompt)
 genlayer account import --name imported --keystore ./keystore.json
 
 # Send tokens
@@ -53,20 +52,10 @@ genlayer account send 0x123...abc 10gen
 
 Amount formats: `"10gen"`, `"0.5gen"`, or raw wei `"1000000000000000000"`
 
-### Non-interactive usage (CI/CD, containers, agents)
+### Passwords
 
-`account create`, `account import`, and `account send` accept `--password <password>` to skip interactive prompts:
-
-```bash
-genlayer account create --name dev1 --password "mypassword"
-genlayer account import --name imported --private-key 0x... --password "mypassword"
-```
-
-`account unlock` requires an OS keychain (macOS Keychain, GNOME Keyring, etc.) and will fail in headless containers. When the account is locked, commands that sign transactions (`deploy`, `write`, `appeal`, `account send`) will prompt for the keystore password. To automate these, pipe the password via stdin:
-
-```bash
-echo "mypassword" | genlayer deploy --contract contracts/my_contract.py --args "arg1"
-```
+This project never passes a key or a keystore password on the command line, in a file or
+through stdin. The keystore password is always typed by the user in a real terminal.
 
 ## Funding Accounts
 

@@ -9,7 +9,6 @@ The five `genlayer-*.md` files in this folder are copied without modification fr
 | `genlayer-write-contract.md` | `plugins/genlayer-dev/skills/write-contract/SKILL.md` |
 | `genlayer-genvm-lint.md` | `plugins/genlayer-dev/skills/genvm-lint/SKILL.md` |
 | `genlayer-direct-tests.md` | `plugins/genlayer-dev/skills/direct-tests/SKILL.md` |
-| `genlayer-integration-tests.md` | `plugins/genlayer-dev/skills/integration-tests/SKILL.md` |
 | `genlayer-genlayer-cli.md` | `plugins/genlayer-dev/skills/genlayer-cli/SKILL.md` |
 
 They are distributed under the upstream license, reproduced exactly below:
