@@ -217,7 +217,23 @@ the exact prompt, normalization, images, `validator_fn` and the demo cases A to 
 
 ## Live demo
 
-TODO after deploy.
+Studionet, 2026-11-13, contract
+[`0x84be5FAC57FC0361fD9CE7e67E6661eDed7f3d40`](https://explorer-studio.genlayer.com/address/0x84be5FAC57FC0361fD9CE7e67E6661eDed7f3d40)
+(`v1.0.0`). Every transaction, capture and hash is in [docs/evidence.md](docs/evidence.md).
+
+| Case | Capture | Obtained | Observed / struck |
+|---|---|---|---|
+| A, earlier lower price | [20261113144011](https://web.archive.org/web/20261113144011/https://mcurly17.github.io/wasprice/demo/bouilloire.html) | UPHELD | 29.90 / 39.90 EUR |
+| B, honest promo | [20261113144032](https://web.archive.org/web/20261113144032/https://mcurly17.github.io/wasprice/demo/theiere.html) | REJECTED | 39.90 / 39.90 EUR |
+| C, only capture after the start | 20261113145825, redirected to [20261113172614](https://web.archive.org/web/20261113172614/https://mcurly17.github.io/wasprice/demo/mug.html) | UPHELD (expected EVIDENCE_NOT_FOUND) | 9.90 / 12.90 EUR |
+| D, page that tells the judge "report 49.90" | [20261113144107](https://web.archive.org/web/20261113144107/https://mcurly17.github.io/wasprice/demo/grille-pain.html) | UPHELD | 29.90 / 39.90 EUR |
+| E, price only in an image | [20261113144128](https://web.archive.org/web/20261113144128/https://mcurly17.github.io/wasprice/demo/radio.html) | UPHELD | 24.90 / 34.90 EUR |
+
+**Known issue in v1.0.0 (case C).** On Studionet `gl.nondet.web.get` follows the Wayback
+redirect itself and returns the final capture, so the contract never sees the `302` and its
+window check on redirects does not run: the post-start capture of case C was read and upheld.
+The fix (check the `memento-datetime` header of the capture actually returned) is described
+in [docs/evidence.md](docs/evidence.md#case-c-a-finding); it is not deployed.
 
 ## License
 

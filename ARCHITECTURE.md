@@ -100,9 +100,11 @@ Read on docs.genlayer.com on 2026-11-13, and exercised by the direct tests (genl
 
 ## Open points
 
-- TODO(verify): a Wayback `id_` request for a timestamp without an exact capture answers a
-  302 to the nearest capture when fetched from Studionet nodes (observed for an image on
-  GreenClaim Bond; to confirm for an HTML page, demo case C).
+- Verified on 2026-11-13 (demo case C): a Wayback `id_` request for a timestamp without an
+  exact capture answers a 302 to the nearest capture, but `gl.nondet.web.get` on Studionet
+  follows it and returns the final 200, so the contract never sees the redirect. v1.0.0
+  therefore misses the window check after a redirect; see docs/evidence.md for the impact and
+  the `memento-datetime` fix.
 - TODO(verify): the Wayback Machine serves the same capture to 5 validators without rate
   limiting (no problem seen on GreenClaim Bond; not documented).
 - TODO(verify): the delay between a Save Page Now and the capture being readable in `id_`
