@@ -1,0 +1,73 @@
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The demo pages are Wayback evidence: every served byte is pinned in
+      # docs/demo/SHA256SUMS (.gitattributes keeps them LF and the PNG binary).
+      - name: Check the pinned demo pages
+        run: cd docs/demo && sha256sum -c SHA256SUMS
+
+      - uses: actions/setup-node@v4
+        if: hashFiles('frontend/package.json') != ''
+        with:
+          node-version: 22
+      - name: Build the static web app
+        if: hashFiles('frontend/package.json') != ''
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+          cp -r frontend/out site
+        env:
+          # Public values only. Empty repository variables fall back to Studionet.
+          NEXT_PUBLIC_CONTRACT_ADDRESS: ${{ vars.NEXT_PUBLIC_CONTRACT_ADDRESS || '0x0000000000000000000000000000000000000001' }}
+          NEXT_PUBLIC_GENLAYER_RPC_URL: ${{ vars.NEXT_PUBLIC_GENLAYER_RPC_URL || 'https://studio.genlayer.com/api' }}
+          NEXT_PUBLIC_GENLAYER_CHAIN_ID: ${{ vars.NEXT_PUBLIC_GENLAYER_CHAIN_ID || '61999' }}
+      - name: Placeholder home page (no web app yet)
+        if: hashFiles('frontend/package.json') == ''
+        run: |
+          mkdir site
+          printf '<!doctype html><meta charset="utf-8"><title>WasPrice</title><p>WasPrice. <a href="demo/">Demo shop</a></p>\n' > site/index.html
+
+      - name: Add the pinned demo shop under /wasprice/demo/
+        run: |
+          set -euo pipefail
+          test ! -e site/demo
+          mkdir -p site/demo/img
+          while read -r digest name; do
+            cp "docs/demo/$name" "site/demo/$name"
+          done < docs/demo/SHA256SUMS
+          cp docs/demo/SHA256SUMS site/demo/SHA256SUMS
+          (cd site/demo && sha256sum -c SHA256SUMS)
+          touch site/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

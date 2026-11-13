@@ -368,3 +368,18 @@ def test_standing_counts_and_bond(direct_vm, contract, direct_alice, direct_bob,
     assert "invalid merchant address" in revert_message(lambda: contract.standing("nope"))
     assert "Aldi" in contract.get_rule() and json.loads(contract.get_stats())["rule"] == "OMNIBUS_PRIOR_PRICE"
     check_solvency(contract, ledger, transfers)
+
+
+# 8. the strict price parser: the same cases as scripts/price.ts -------------------------
+
+def test_price_parser_matches_the_shared_cases(direct_vm, contract, direct_alice, ledger):
+    import pathlib
+
+    cases = json.loads((pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "price-cases.json").read_text(encoding="utf-8"))
+    make_pledge(direct_vm, contract, direct_alice, ledger)
+    for text, cents in cases["valid"].items():
+        msg = preview_declare(contract, direct_alice, was="9999999.99", promo=text, pct=0)
+        assert ("prices must look like" in msg) is False, text
+        assert (msg == "") == (0 < cents < 999999999), (text, msg)
+    for text in cases["invalid"]:
+        assert "prices must look like 39.90" in preview_declare(contract, direct_alice, promo=text, pct=0), repr(text)

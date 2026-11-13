@@ -12,7 +12,7 @@ const DIR = new URL("./", import.meta.url);
 
 test("scripts/ never reads PRIVATE_KEY nor accepts --private-key", () => {
   const files = readdirSync(DIR).filter((name) => name !== SELF && /\.(ts|mjs|js|py)$/.test(name));
-  assert.ok(files.includes("value.ts"));
+  assert.ok(files.includes("value.ts") && files.includes("wasprice.ts"));
   let refusals = 0;
   for (const name of files) {
     let source = readFileSync(new URL(name, DIR), "utf8");
