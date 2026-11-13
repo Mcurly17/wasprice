@@ -1,0 +1,38 @@
+# Private working notes
+SPEC.md
+
+# Local assistant settings (attribution off, gated commands denied)
+.claude/settings.local.json
+
+# Secrets: never commit
+.env
+.env.*
+!.env.example
+*.keystore.json
+keypair.json
+*.pem
+
+# Python environments, bytecode and test outputs
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.gltest_cache/
+artifacts/
+
+# Node
+node_modules/
+*.tsbuildinfo
+/frontend/.next
+/frontend/out
+/frontend/next-env.d.ts
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local downloads used to verify hashes
+page.bin
+*.bin

@@ -1,0 +1,6 @@
+* text=auto eol=lf
+# Images are bytes: never convert them.
+*.png binary
+# Demo pages are pinned by SHA-256 (docs/demo/SHA256SUMS): LF everywhere.
+docs/demo/*.html text eol=lf
+tests/fixtures/**/*.html text eol=lf

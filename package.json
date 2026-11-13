@@ -1,0 +1,15 @@
+{
+  "name": "wasprice",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "lint": "cd frontend && npm run lint",
+    "build": "cd frontend && npm run build",
+    "test:frontend": "cd frontend && npm test",
+    "test:scripts": "node --test scripts/*.test.ts",
+    "wasprice": "node --env-file-if-exists=.env scripts/wasprice.ts"
+  },
+  "devDependencies": {
+    "genlayer-js": "1.1.8"
+  }
+}
