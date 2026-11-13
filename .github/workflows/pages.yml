@@ -26,13 +26,11 @@ jobs:
         run: cd docs/demo && sha256sum -c SHA256SUMS
 
       - uses: actions/setup-node@v4
-        if: hashFiles('frontend/package.json') != ''
         with:
-          node-version: 22
+          node-version: 24
       - name: Build the static web app
-        if: hashFiles('frontend/package.json') != ''
         run: |
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
           npm run build
           cp -r frontend/out site
         env:
@@ -40,12 +38,6 @@ jobs:
           NEXT_PUBLIC_CONTRACT_ADDRESS: ${{ vars.NEXT_PUBLIC_CONTRACT_ADDRESS || '0x0000000000000000000000000000000000000001' }}
           NEXT_PUBLIC_GENLAYER_RPC_URL: ${{ vars.NEXT_PUBLIC_GENLAYER_RPC_URL || 'https://studio.genlayer.com/api' }}
           NEXT_PUBLIC_GENLAYER_CHAIN_ID: ${{ vars.NEXT_PUBLIC_GENLAYER_CHAIN_ID || '61999' }}
-      - name: Placeholder home page (no web app yet)
-        if: hashFiles('frontend/package.json') == ''
-        run: |
-          mkdir site
-          printf '<!doctype html><meta charset="utf-8"><title>WasPrice</title><p>WasPrice. <a href="demo/">Demo shop</a></p>\n' > site/index.html
-
       - name: Add the pinned demo shop under /wasprice/demo/
         run: |
           set -euo pipefail

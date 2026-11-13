@@ -3,6 +3,7 @@ SPEC.md
 
 # Local assistant settings (attribution off, gated commands denied)
 .claude/settings.local.json
+.claude/launch.json
 
 # Secrets: never commit
 .env

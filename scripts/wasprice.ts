@@ -233,7 +233,7 @@ async function run(plan: Plan): Promise<void> {
       await snapshot(plan.url, plan.ts, plan.promoId);
       return;
     case "wait":
-      await settle(plan.hash, "wait");
+      await settle(plan.hash as TransactionHash, "wait");
       return;
     case "deploy": {
       const stored = readActiveKeystore();
