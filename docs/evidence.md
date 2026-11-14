@@ -118,7 +118,9 @@ with a followed redirect, and replayed on Studionet below.
 - Studio: <https://studio.genlayer.com/?import-contract=0x8FE01BfEeA15590B563b14A6357d0753ADAA9DD8>
 - Source: `contracts/was_price.py` at tag `v1.1.0` (39,907 bytes), same pinned runner
 - CI on `0064a54` (v1.1.0): <https://github.com/Mcurly17/wasprice/actions/runs/43490590595> (green);
-  Pages: <https://github.com/Mcurly17/wasprice/actions/runs/43490590526>
+  Pages: <https://github.com/Mcurly17/wasprice/actions/runs/43490590526>; Pages with the
+  v1.1.0 contract address (the web app now reads this contract):
+  <https://github.com/Mcurly17/wasprice/actions/runs/43580886847>
 
 Same accounts, same demo pages and captures. The promos keep their original `promo_start`, so
 the only capture of `mug.html` (20261113172614) still falls after the start of promo C. Before
