@@ -106,7 +106,8 @@ Read on docs.genlayer.com on 2026-11-13, and exercised by the direct tests (genl
   therefore missed the window check after a redirect (docs/evidence.md). v1.1.0 reads the
   `Memento-Datetime` header of the returned capture (page and image), checks it against the
   window, stores it as `judged_ts`, and settles EVIDENCE_NOT_FOUND without an LLM call when
-  it is missing or unreadable.
+  it is missing or unreadable. Replayed on Studionet with the v1.1.0 contract: case C settles
+  EVIDENCE_NOT_FOUND (`[EXTERNAL] capture not in window`) and case A is still upheld.
 - TODO(verify): the Wayback Machine serves the same capture to 5 validators without rate
   limiting (no problem seen on GreenClaim Bond; not documented).
 - TODO(verify): the delay between a Save Page Now and the capture being readable in `id_`

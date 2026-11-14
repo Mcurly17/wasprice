@@ -94,12 +94,13 @@ Impact: any challenger can file a timestamp inside the window that Wayback redir
 capture taken after the promotion started, which shows the promotional price, always below
 the struck price. The window protection of case C does not hold on the live network in v1.0.0.
 
-Proposed fix (not applied; the deployed contract is unchanged): on a 200, read the
+Fix, in `v1.1.0` (the v1.0.0 contract above is unchanged): on a 200, read the
 `memento-datetime` header that the Wayback Machine returns on every `id_` capture (here
 `Fri, 13 Nov 2026 17:26:14 GMT`), convert it to a 14-digit timestamp, require it inside
-`[promo_start - 30 days, promo_start)` and store it as `judged_ts`; a missing header gives
-`[EXTERNAL] capture time unknown`. This needs a new test with a followed redirect and a new
-deployment.
+`[promo_start - 30 days, promo_start)` and store it as `judged_ts`; a missing or unreadable
+header gives `[EXTERNAL] capture time unknown`, and both cases settle EVIDENCE_NOT_FOUND
+without an LLM call. The same check applies to the image capture. Covered by the direct tests
+with a followed redirect, and replayed on Studionet below.
 
 ## Final state
 
@@ -109,6 +110,53 @@ deployment.
 - Promos: 0, 2, 3, 4 DEBUNKED; 1 LIVE.
 - timbre-b credit before withdrawal: 0.44 GEN (4 × (0.01 + 0.1)); withdrawn in full (0.44 GEN), credit now 0, `total_credits` 0.
 - Solvency: 0.5 bond + 0.05 stakes = 0.11 bond + 0.44 credits.
+
+## v1.1.0 replay (cases A and C)
+
+- Address: `0x8FE01BfEeA15590B563b14A6357d0753ADAA9DD8`
+- Explorer: <https://explorer-studio.genlayer.com/address/0x8FE01BfEeA15590B563b14A6357d0753ADAA9DD8>
+- Studio: <https://studio.genlayer.com/?import-contract=0x8FE01BfEeA15590B563b14A6357d0753ADAA9DD8>
+- Source: `contracts/was_price.py` at tag `v1.1.0` (39,907 bytes), same pinned runner
+- CI on `0064a54` (v1.1.0): <https://github.com/Mcurly17/wasprice/actions/runs/43490590595> (green);
+  Pages: <https://github.com/Mcurly17/wasprice/actions/runs/43490590526>
+
+Same accounts, same demo pages and captures. The promos keep their original `promo_start`, so
+the only capture of `mug.html` (20261113172614) still falls after the start of promo C. Before
+the challenges, `snapshot` read `mug.html` at `20261113145825id_`: `302` to `20261113172614id_`,
+whose `memento-datetime` is `Fri, 13 Nov 2026 17:26:14 GMT`; `bouilloire.html` at
+`20261113144011id_`: 200, SHA-256 `dfdbee0b…7663` (v1).
+
+| Step | Transaction | What it shows |
+|---|---|---|
+| Deploy | [0x8dd1a51a…4fcc](https://explorer-studio.genlayer.com/tx/0x8dd1a51aa02a0916a11f25d03b5d70597d4cd35bae95799fabc06abd04274fcc) | WasPrice v1.1.0 deployed by timbre-a |
+| Pledge 0 | [0x2e0e01db…e40d](https://explorer-studio.genlayer.com/tx/0x2e0e01dbd701644ee715d435aa34920d6f0b506b41473c7743b74a46bcd1e40d) | "DemoMaison", domain mcurly17.github.io, bond 0.2 GEN, payout 0.1, 30 days |
+| Promo 0 (A) | [0x13a43509…7549](https://explorer-studio.genlayer.com/tx/0x13a435096c5f085c1a6e1236a94fdaa2527d970c2f4076f6b8cad5d21fea7549) | bouilloire 39.90 → 34.90, 13 %, start 2026-11-13T14:52:03Z |
+| Promo 1 (C) | [0xf0d36824…1851](https://explorer-studio.genlayer.com/tx/0xf0d36824b0d93aa3fec3732b85eb1fcf0e71f9f993a2afc5b8d6f97e74bf1851) | mug 12.90 → 9.90, 23 %, start 2026-11-13T14:59:25Z |
+| Challenge 0 (A) | [0x2120a178…f22d](https://explorer-studio.genlayer.com/tx/0x2120a17884486e2d376156b8dc7c52aae9c625ff041b9fb8d42b8d8cfebef22d) | capture 20261113144011, stake 0.01 |
+| Challenge 1 (C) | [0x211490ee…6754](https://explorer-studio.genlayer.com/tx/0x211490eee9790d4a72ef0bc4ca59ad38bcaac281c33bf0039b03fed087c86754) | snapshot_ts 20261113145825 (promo_start - 60 s), stake 0.01 |
+| Resolve 0 (A) | [0xb0008a65…20ad](https://explorer-studio.genlayer.com/tx/0xb0008a6571fdc1477c2a42ecd7e24843bc13f932ad8b3f3342fd1ff9dea920ad) | UPHELD |
+| Resolve 1 (C) | [0x68631cca…d7c0](https://explorer-studio.genlayer.com/tx/0x68631cca87e7106c4018034172e14918ce1846cc9847b6ee63c176265f71d7c0) | EVIDENCE_NOT_FOUND |
+| Withdraw | [0xf5821478…fa93](https://explorer-studio.genlayer.com/tx/0xf582147833aa9f87c2f42d4d9a820d4836c4d18448f09d49998721dff9bbfa93) | timbre-b withdraws its 0.11 GEN credit |
+
+Every receipt is ACCEPTED, MAJORITY_AGREE, SUCCESS.
+
+| Case | Challenge | Expected | Obtained | Observed / struck | judged_ts | page_sha256 | Reason |
+|---|---|---|---|---|---|---|---|
+| A, earlier lower price | 0 | UPHELD | **UPHELD** | 29.90 / 39.90 EUR | 20261113144011 (memento) | `dfdbee0b…7663` (= v1) | "observed 29.90 EUR, was 39.90 EUR: The declared kettle displays an unconditional price of €29.90 including VAT, ..." |
+| C, capture after the start | 1 | EVIDENCE_NOT_FOUND | **EVIDENCE_NOT_FOUND** | none | none | none | `[EXTERNAL] capture not in window` |
+
+Case C now holds: the node still followed the redirect, but the contract read the capture
+time of the page it received (17:26:14, after the promo start of 14:59:25), rejected it before
+any LLM call, and stored no reading. The challenger's stake went to the bond and promo C
+stays LIVE.
+
+Final state of the v1.1.0 contract:
+
+- Pledge 0: bond 0.11 GEN available, 0 reserved (0.2 - 0.1 payout of A + 0.01 lost stake of C).
+- `standing(timbre-a)`: 1 pledge, 2 promos, 1 debunked, 0 rejected, 1 evidence_not_found,
+  bonded_now 0.11 GEN.
+- timbre-b credit 0.11 GEN (0.01 + 0.1), withdrawn in full; `total_credits` 0.
+- Solvency: 0.2 bond + 0.02 stakes = 0.11 bond + 0.11 withdrawn.
 
 ## Verify a judged capture
 

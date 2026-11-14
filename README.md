@@ -239,8 +239,17 @@ Studionet, 2026-11-13, contract
 redirect itself and returns the final capture, so the contract never sees the `302` and its
 window check on redirects does not run: the post-start capture of case C was read and upheld.
 The fix (check the `memento-datetime` header of the capture actually returned) is in
-`v1.1.0`; see [docs/evidence.md](docs/evidence.md#case-c-a-finding). Its redeployment and the
-replay of case C are recorded there once done.
+`v1.1.0`; see [docs/evidence.md](docs/evidence.md#case-c-a-finding).
+
+**v1.1.0 replay.** Contract
+[`0x8FE01BfEeA15590B563b14A6357d0753ADAA9DD8`](https://explorer-studio.genlayer.com/address/0x8FE01BfEeA15590B563b14A6357d0753ADAA9DD8)
+(`v1.1.0`), same pages, captures and promo starts
+([details](docs/evidence.md#v110-replay-cases-a-and-c)):
+
+| Case | Capture | Obtained | Observed / struck |
+|---|---|---|---|
+| A, earlier lower price | [20261113144011](https://web.archive.org/web/20261113144011/https://mcurly17.github.io/wasprice/demo/bouilloire.html) | UPHELD | 29.90 / 39.90 EUR |
+| C, only capture after the start | 20261113145825, redirected to [20261113172614](https://web.archive.org/web/20261113172614/https://mcurly17.github.io/wasprice/demo/mug.html) | EVIDENCE_NOT_FOUND (`[EXTERNAL] capture not in window`, no LLM call) | none |
 
 ## License
 
