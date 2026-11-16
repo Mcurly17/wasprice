@@ -204,9 +204,9 @@ Reads after the periods (`promo`, `promos 0`, `window 1`):
 Final state of the v1.2.0 contract: pledge 0 inactive, bond 0, reserved 0, `total_credits` 0,
 both credits withdrawn. Solvency: 0.2 bond + 0.01 stake = 0.11 (timbre-b) + 0.1 (timbre-a).
 
-The steps between the declarations (15:06Z) and the late challenge (20:27Z) were spaced by
-the operator's availability, not by the contract: the late challenge came about five hours
-after B's period had ended, and the close about five hours after A's.
+The steps between the declarations (15:06Z) and the late challenge (about 19:27Z) were spaced
+by the operator's availability, not by the contract: the late challenge came about four hours
+after B's period had ended, and the close about four hours after A's.
 
 ## Verify a judged capture
 
