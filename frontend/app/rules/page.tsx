@@ -25,7 +25,10 @@ export default function Rules() {
       </ul>
       <h2>What is judged, and how</h2>
       <ol>
-        <li>Filing a challenge makes no web or AI call. The capture time must lie in [promo start − 30 days, promo start).</li>
+        <li>
+          Filing a challenge makes no web or AI call. It must happen within the promo&rsquo;s challenge period, and the
+          capture time must lie in [promo start − 30 days, promo start).
+        </li>
         <li>
           On resolve, each validator fetches the archived bytes (<span className="mono">web.archive.org/web/&lt;ts&gt;id_/&lt;url&gt;</span>).
           A Wayback redirect is followed only to a capture of the same URL inside the window; otherwise the result is
@@ -36,6 +39,21 @@ export default function Rules() {
         <li>Validators must agree on the capture, its SHA-256, the product match and the price to the cent. The reason text is never compared.</li>
         <li>The contract then decides with a plain comparison and settles: upheld pays stake + payout from the bond; rejected or no evidence adds the stake to the bond.</li>
       </ol>
+      <h2>Challenge period and bond lock</h2>
+      <ul>
+        <li>
+          Each promotion gets a challenge period when it is declared: it starts at the declaration or at the promo start,
+          whichever is later, and lasts the number of minutes the merchant chose, between the deployment minimum (7 days
+          by default; a 10-minute minimum is used only for the Studionet demo) and 90 days.
+        </li>
+        <li>The period must end no later than the end of the pledge coverage, otherwise the declaration is refused.</li>
+        <li>No challenge can be filed once the period has ended. A challenge filed in time can still be resolved after it.</li>
+        <li>After its period, a promo with no open challenge is shown as Closed, never Live. A debunked promo stays Debunked.</li>
+        <li>
+          The merchant recovers the bond only by closing the pledge, which is refused until every challenge period of the
+          pledge has ended and no challenge is open. There is no partial withdrawal.
+        </li>
+      </ul>
       <h2>What is not judged</h2>
       <ul>
         <li>National exceptions (perishable goods, progressive reductions, products on sale for less than 30 days).</li>

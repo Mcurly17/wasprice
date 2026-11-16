@@ -5,7 +5,7 @@ import { buttonState, captureTs, samePage } from "../lib/actions.ts";
 import { badgeSnippet, formatGen, formatTs14, parseGenInput, shortAddress, verifyCommand, waybackView } from "../lib/format.ts";
 import { centsToString, expectedPct, parseCents, pctOk } from "../lib/price.ts";
 import { RULE_TEXT } from "../lib/rules.ts";
-import { statusLabel, statusMeaning, statusTone } from "../lib/status.ts";
+import { periodNote, statusLabel, statusMeaning, statusTone } from "../lib/status.ts";
 import { checkSnapshot, isoToUnix, parseWaybackUrl, windowOf } from "../lib/window.ts";
 
 const ROOT = new URL("../../", import.meta.url);
@@ -56,6 +56,16 @@ test("status labels and tones", () => {
   assert.equal(statusTone("REJECTED"), "good");
   assert.match(statusMeaning("EXPIRED"), /refunded/);
   assert.equal(statusLabel("SOMETHING"), "SOMETHING");
+  assert.equal(statusLabel("CLOSED"), "Closed");
+  assert.equal(statusTone("CLOSED"), "neutral");
+});
+
+test("the period note never calls a closed promo open", () => {
+  const until = "2026-11-16T12:10:00Z";
+  assert.match(periodNote({ status: "CLOSED", open_challenge: false, challenge_until: until }), /ended at 2026-11-16T12:10:00Z.*no longer/);
+  assert.match(periodNote({ status: "LIVE", open_challenge: false, challenge_until: until }), /^Open to challenges until 2026-11-16T12:10:00Z/);
+  assert.match(periodNote({ status: "LIVE", open_challenge: true, challenge_until: until }), /filed in time is open/);
+  assert.match(periodNote({ status: "DEBUNKED", open_challenge: false, challenge_until: until }), /debunked/);
 });
 
 test("the write button waits for an empty preview", () => {

@@ -50,6 +50,9 @@ T_CHALLENGE = "2026-11-13T13:00:00Z"  # challenge filing
 WINDOW_FROM = "20261014120000"       # START - 30 days
 WINDOW_TO = "20261113120000"         # START (exclusive)
 TS_IN = "20261101120000"             # a capture inside the window
+MIN_MINUTES = 10                     # constructor floor used by the test deployments (demo setting)
+PERIOD = 7 * 1440                    # default challenge period of a test promo: 7 days
+UNTIL = "2026-11-20T12:00:00Z"       # START + PERIOD
 
 DOMAIN = "mcurly17.github.io"
 BASE = "https://mcurly17.github.io/wasprice/demo/"
@@ -80,7 +83,7 @@ def ledger():
 @pytest.fixture
 def contract(direct_vm, direct_deploy):
     direct_vm.warp(T0)
-    return direct_deploy(CONTRACT)
+    return direct_deploy(CONTRACT, MIN_MINUTES)
 
 
 def revert_message(fn):
@@ -112,9 +115,9 @@ def make_pledge(vm, contract, merchant, ledger=None, bond=BOND, payout=PAYOUT, d
 
 
 def declare(vm, contract, merchant, url=URL_A, was="39.90", promo="34.90", pct=13,
-            start=START, variant="", pledge_id=0):
+            start=START, variant="", pledge_id=0, minutes=PERIOD):
     vm.sender = merchant
-    return contract.declare_promo(pledge_id, url, variant, was, promo, pct, start)
+    return contract.declare_promo(pledge_id, url, variant, was, promo, pct, start, minutes)
 
 
 def open_challenge(vm, contract, challenger, ledger=None, promo_id=0, ts=TS_IN, stake=STAKE,

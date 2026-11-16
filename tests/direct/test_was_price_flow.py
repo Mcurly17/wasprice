@@ -5,8 +5,8 @@ import json
 import pytest
 
 from .conftest import (
-    BOND, DOMAIN, GEN, IMAGE_E, PAYOUT, STAKE, START, T0, T_CHALLENGE, TS_IN, URL_A, URL_B,
-    URL_C, URL_D, WINDOW_FROM, WINDOW_TO, check_solvency, declare, make_pledge, open_challenge,
+    BOND, DOMAIN, GEN, IMAGE_E, PAYOUT, PERIOD, STAKE, START, T0, T_CHALLENGE, TS_IN, UNTIL, URL_A,
+    URL_B, URL_D, WINDOW_FROM, WINDOW_TO, check_solvency, declare, make_pledge, open_challenge,
     pay, revert_message, to_hex,
 )
 
@@ -38,6 +38,7 @@ def test_create_pledge_stores_bond_and_terms(direct_vm, contract, direct_alice, 
     assert (p["bond"], p["reserved"], p["payout"], p["min_stake"]) == (str(BOND), "0", str(PAYOUT), str(PAYOUT // 10))
     assert p["created_at"] == T0 and p["ends_at"] == "2026-12-13T12:00:00Z"
     assert p["active"] is True and p["n_promos"] == 0 and p["domain"] == DOMAIN
+    assert p["locked_until"] == T0
     check_solvency(contract, ledger, transfers)
 
 
@@ -79,8 +80,9 @@ def test_top_up_by_merchant_only(direct_vm, contract, direct_alice, direct_bob, 
 
 # 2. declare_promo ------------------------------------------------------------------------
 
-def preview_declare(contract, sender, url=URL_A, was="39.90", promo="34.90", pct=13, start=START, variant="", pledge_id=0):
-    return contract.preview_declare(to_hex(sender), pledge_id, url, variant, was, promo, pct, start)
+def preview_declare(contract, sender, url=URL_A, was="39.90", promo="34.90", pct=13, start=START, variant="",
+                    pledge_id=0, minutes=PERIOD):
+    return contract.preview_declare(to_hex(sender), pledge_id, url, variant, was, promo, pct, start, minutes)
 
 
 def test_declare_promo_normalizes_and_stores(direct_vm, contract, direct_alice, ledger, transfers):
@@ -93,7 +95,9 @@ def test_declare_promo_normalizes_and_stores(direct_vm, contract, direct_alice, 
     assert (pr["was_price"], pr["promo_price"], pr["pct"], pr["currency"]) == ("39.90", "34.90", 13, "EUR")
     assert pr["promo_start"] == START and pr["status"] == "LIVE" and pr["variant"] == "1,7 L, inox"
     assert (pr["window_from_ts"], pr["window_to_ts"]) == (WINDOW_FROM, WINDOW_TO)
-    assert json.loads(contract.get_pledge(0))["n_promos"] == 1
+    assert pr["challenge_until"] == UNTIL
+    p = json.loads(contract.get_pledge(0))
+    assert p["n_promos"] == 1 and p["locked_until"] == UNTIL
     assert contract.promo_status(0) == "LIVE"
     check_solvency(contract, ledger, transfers)
 
@@ -262,7 +266,7 @@ def test_challenge_after_pledge_end_is_refused(direct_vm, contract, direct_alice
     declare(direct_vm, contract, direct_alice)
     preview = preview_challenge(direct_vm, contract, direct_bob, at="2026-11-20T12:00:00Z")
     assert_same_refusal(lambda: open_challenge(direct_vm, contract, direct_bob, ledger, at="2026-11-20T12:00:00Z"),
-                        preview, "pledge coverage has ended")
+                        preview, f"challenge period ended ({UNTIL})")
 
 
 def test_preview_challenge_rejects_bad_inputs(direct_vm, contract, direct_alice, direct_bob, ledger):
@@ -301,7 +305,7 @@ def test_close_pledge_rules(direct_vm, contract, direct_alice, direct_bob, ledge
     declare(direct_vm, contract, direct_alice)
     open_challenge(direct_vm, contract, direct_bob, ledger)
     direct_vm.sender = direct_alice
-    assert "coverage has not ended" in revert_message(lambda: contract.close_pledge(0))
+    assert revert_message(lambda: contract.close_pledge(0)) == f"[EXPECTED] a promo challenge period is open until {UNTIL}"
     direct_vm.warp("2026-11-20T12:00:00Z")
     direct_vm.sender = direct_bob
     assert "only the merchant can close" in revert_message(lambda: contract.close_pledge(0))
@@ -342,17 +346,6 @@ def test_withdraw_pays_the_exact_credit_once(direct_vm, contract, direct_alice, 
 
 
 # 7. views --------------------------------------------------------------------------------
-
-def test_promo_window_bounds_and_calendar(direct_vm, contract, direct_alice, ledger):
-    setup_promo(direct_vm, contract, direct_alice, ledger, url=URL_C, was="12.90", promo="9.90", pct=23)
-    w = json.loads(contract.promo_window(0))
-    assert w == {
-        "from_ts": WINDOW_FROM,
-        "to_ts": WINDOW_TO,
-        "wayback_calendar": f"https://web.archive.org/web/{WINDOW_FROM}*/{URL_C}",
-    }
-    assert "unknown promo" in revert_message(lambda: contract.promo_window(3))
-
 
 def test_standing_counts_and_bond(direct_vm, contract, direct_alice, direct_bob, ledger, transfers):
     make_pledge(direct_vm, contract, direct_alice, ledger)

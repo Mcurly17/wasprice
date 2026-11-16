@@ -10,7 +10,6 @@ import re
 import unicodedata
 from urllib.parse import urljoin
 
-# EXPECTED/EXTERNAL: exact match; TRANSIENT: both transient; LLM_ERROR: never agrees.
 ERROR_EXPECTED = "[EXPECTED]"
 ERROR_EXTERNAL = "[EXTERNAL]"
 ERROR_TRANSIENT = "[TRANSIENT]"
@@ -33,6 +32,7 @@ MIN_PAYOUT = 10**16
 PLEDGE_DAYS = (7, 365)
 START_PAST_MAX = 7 * DAY
 START_FUTURE_MAX = 30 * DAY
+CHALLENGE_MINUTES = (10, 90 * 1440)
 MAX_PROMOS_PER_PLEDGE = 50
 MAX_OPEN_PER_CHALLENGER = 5
 RESOLVE_WINDOW = 3 * DAY
@@ -49,11 +49,10 @@ LIST_MAX = 50
 CURRENCIES = ("EUR",)
 
 TEXT, IMAGE = "TEXT", "IMAGE"
-LIVE, DEBUNKED = "LIVE", "DEBUNKED"
+LIVE, DEBUNKED, CLOSED = "LIVE", "DEBUNKED", "CLOSED"
 OPEN, UPHELD, REJECTED = "OPEN", "UPHELD", "REJECTED"
 EVIDENCE_NOT_FOUND, EXPIRED = "EVIDENCE_NOT_FOUND", "EXPIRED"
 ARCHIVE = "https://web.archive.org/web/"
-
 
 @allow_storage
 @dataclass
@@ -69,7 +68,7 @@ class Pledge:
 	ends_at: u64
 	active: bool
 	n_promos: u32
-
+	locked_until: u64
 
 @allow_storage
 @dataclass
@@ -83,10 +82,10 @@ class Promo:
 	pct: u32
 	promo_start: u64
 	declared_at: u64
+	challenge_until: u64
 	status: str
 	open_challenge: bool
 	n_challenges: u32
-
 
 @allow_storage
 @dataclass
@@ -109,7 +108,6 @@ class Challenge:
 	opened_at: u64
 	resolve_deadline: u64
 
-
 @gl.evm.contract_interface
 class _Recipient:
 	class View:
@@ -117,7 +115,6 @@ class _Recipient:
 
 	class Write:
 		pass
-
 
 _PRICE_RE = re.compile(r"[0-9]{1,7}\.[0-9]{2}")
 _TS14_RE = re.compile(r"[0-9]{14}")
@@ -144,38 +141,29 @@ _VOID = ("img", "input", "br", "hr", "meta", "link", "source", "area", "wbr", "e
 _SAME_KEYS = ("judged_ts", "page_sha256", "image_ts", "image_sha256",
 			  "product_match", "price_found", "observed_cents", "currency")
 
-
 def _err(msg: str) -> str:
 	return f"{ERROR_EXPECTED} {msg}"
-
 
 def _expected(msg: str) -> gl.vm.UserError:
 	return gl.vm.UserError(_err(msg))
 
-
 def _ext(msg: str) -> gl.vm.UserError:
 	return gl.vm.UserError(f"{ERROR_EXTERNAL} {msg}")
-
 
 def _llm(msg: str) -> gl.vm.UserError:
 	return gl.vm.UserError(f"{ERROR_LLM} {msg}")
 
-
 def _now() -> int:
 	return int(datetime.datetime.now(datetime.timezone.utc).timestamp())
 
-
 def _parse_cents(value: object) -> int | None:
-	# Strict "39.90" -> 3990, integers only. Mirrored in frontend/lib/price.ts.
 	if not isinstance(value, str) or _PRICE_RE.fullmatch(value) is None:
 		return None
 	euros, cents = value.split(".")
 	return int(euros) * 100 + int(cents)
 
-
 def _cents_str(cents: int) -> str:
 	return f"{cents // 100}.{cents % 100:02d}"
-
 
 def _dt(*parts: int) -> int | None:
 	try:
@@ -183,41 +171,32 @@ def _dt(*parts: int) -> int | None:
 	except ValueError:
 		return None
 
-
 def _ts14_to_unix(v: object) -> int | None:
 	if not isinstance(v, str) or _TS14_RE.fullmatch(v) is None:
 		return None
 	return _dt(int(v[0:4]), int(v[4:6]), int(v[6:8]), int(v[8:10]), int(v[10:12]), int(v[12:14]))
 
-
 def _fmt(t: int, f: str) -> str:
 	return datetime.datetime.fromtimestamp(t, datetime.timezone.utc).strftime(f)
-
 
 def _ts14(t: int) -> str:
 	return _fmt(t, "%Y%m%d%H%M%S")
 
-
 def _iso(t: int) -> str:
 	return _fmt(t, "%Y-%m-%dT%H:%M:%SZ")
-
 
 def _iso_to_unix(value: object) -> int | None:
 	m = _ISO_RE.fullmatch(value) if isinstance(value, str) else None
 	return None if m is None else _dt(*(int(g) for g in m.groups()))
 
-
 def _expected_pct(was: int, promo: int) -> int:
 	return (200 * (was - promo) + was) // (2 * was)
-
 
 def _pct_ok(was: int, promo: int, pct: int) -> bool:
 	return pct == 0 or abs(pct - _expected_pct(was, promo)) <= 1
 
-
 def _has_control(text: str) -> bool:
 	return any(unicodedata.category(ch) == "Cc" for ch in text)
-
 
 def _norm_url(raw: object, what: str) -> tuple[str, str]:
 	url = raw.strip() if isinstance(raw, str) else ""
@@ -235,19 +214,15 @@ def _norm_url(raw: object, what: str) -> tuple[str, str]:
 		return "", _err(f"{what} must use the default https port")
 	return "https://" + host.rstrip(".") + (m.group(2) or "/"), ""
 
-
 def _clean_name(name: object) -> str:
 	return _WS_RE.sub(" ", name).strip() if isinstance(name, str) else ""
-
 
 def _domain_ok(d: object) -> bool:
 	return (isinstance(d, str) and _DOMAIN_RE.fullmatch(d) is not None and "." in d
 			and d[0] not in ".-" and d[-1] not in ".-" and ".." not in d)
 
-
 def _wei(value: object) -> int | None:
 	return int(value) if isinstance(value, str) and _WEI_RE.fullmatch(value) else None
-
 
 def _check_pledge(name: object, domain: object, payout: int, days: int, value: int) -> str:
 	clean = _clean_name(name)
@@ -263,32 +238,25 @@ def _check_pledge(name: object, domain: object, payout: int, days: int, value: i
 		return _err(f"days must be between {PLEDGE_DAYS[0]} and {PLEDGE_DAYS[1]}")
 	return ""
 
-
 def _decided_key(promo_id: int, ts: str, kind: str, image_url: str) -> str:
 	return f"{promo_id}:{ts}:{kind}:{image_url}"
-
 
 def _error_message(err: object) -> str:
 	msg = getattr(err, "message", None)
 	return msg if isinstance(msg, str) else str(err)
 
-
 def _clip(text: str, limit: int) -> str:
 	text = _WS_RE.sub(" ", text).strip()
 	return text if len(text) <= limit else text[: limit - 3].rstrip() + "..."
 
-
 def _valid(value: object, pattern: re.Pattern) -> str:
 	return value if isinstance(value, str) and pattern.fullmatch(value) is not None else ""
-
 
 def _parse_address(raw: object) -> Address | None:
 	try:
 		return Address(raw)
 	except Exception:
 		return None
-
-
 
 def _attrs(raw: str) -> dict:
 	out: dict = {}
@@ -299,12 +267,10 @@ def _attrs(raw: str) -> dict:
 		out.setdefault(m.group(1).lower(), html.unescape(v))
 	return out
 
-
 def _is_hidden(a: dict) -> bool:
 	style = _WS_RE.sub("", a.get("style", "")).lower()
 	return ("hidden" in a or a.get("aria-hidden", "").strip().lower() == "true"
 			or "display:none" in style or "visibility:hidden" in style)
-
 
 def _close_end(body: str, name: str, start: int) -> int:
 	depth = 1
@@ -314,10 +280,8 @@ def _close_end(body: str, name: str, start: int) -> int:
 			return start + t.end()
 	return len(body)
 
-
 def _strip_hidden(body: str) -> str:
-	# Best effort, by regex: hidden, aria-hidden="true", display:none and visibility:hidden
-	# elements are dropped with their content. External CSS is not read.
+	# Best effort, by regex; external CSS is not read.
 	out, pos = [], 0
 	while (m := _OPEN_RE.search(body, pos)) is not None:
 		if not _is_hidden(_attrs(m.group(2))):
@@ -331,10 +295,8 @@ def _strip_hidden(body: str) -> str:
 	out.append(body[pos:])
 	return "".join(out)
 
-
 def _compact(text: str) -> str:
 	return _WS_RE.sub(" ", unicodedata.normalize("NFKC", text)).strip()
-
 
 def _visible_text(raw: str) -> tuple[str, str]:
 	m = _TITLE_RE.search(raw)
@@ -343,28 +305,20 @@ def _visible_text(raw: str) -> tuple[str, str]:
 	body = _TAG_RE.sub(" ", _strip_hidden(body))
 	return _compact(html.unescape(body))[:PAGE_TEXT_MAX], title
 
-
 def _hint(value: str) -> str:
 	m = _HINT_RE.fullmatch(_WS_RE.sub("", value).replace(",", ".").rstrip("."))
 	return f"{int(m.group(1))}.{(m.group(2) or '').ljust(2, '0')}" if m else ""
 
-
 def _price_hints(raw: str) -> list[str]:
-	# Structured prices read BEFORE cleaning: untrusted hints for the LLM, never compared.
+	# JSON-LD prices read BEFORE cleaning: untrusted hints for the LLM, never compared.
 	found = []
 	for block in _LDJSON_RE.findall(raw):
 		found += _LD_PRICE_RE.findall(block)
-	for m in _OPEN_RE.finditer(raw):
-		a = _attrs(m.group(2))
-		if a.get("itemprop", "").lower() == "price" or a.get("property", "").lower() in (
-				"product:price:amount", "og:price:amount"):
-			found.append(a.get("content", ""))
 	out: list[str] = []
 	for h in map(_hint, found):
 		if h != "" and h not in out:
 			out.append(h)
 	return out[:HINTS_MAX]
-
 
 def _find_image_ref(raw: str, page_url: str, image_url: str) -> str | None:
 	body = _BLOCK_RE.sub(" ", _COMMENT_RE.sub(" ", raw))
@@ -382,16 +336,13 @@ def _find_image_ref(raw: str, page_url: str, image_url: str) -> str | None:
 				return _clip(_compact(a.get("alt", "")), 200)
 	return None
 
-
 def _is_image(b: bytes) -> bool:
 	return b.startswith(b"\x89PNG\r\n\x1a\n") or b.startswith(b"\xff\xd8\xff") or (
 		b[:4] == b"RIFF" and b[8:12] == b"WEBP")
 
-
 def _neutralize(text: str) -> str:
 	text = text.replace("<", "‹").replace(">", "›")
 	return "".join(ch for ch in text if ch == "\n" or unicodedata.category(ch) != "Cc")
-
 
 def _build_prompt(date: str, url: str, variant: str, currency: str, image_url: str,
 				  title: str, alt: str, hints: list[str], text: str) -> str:
@@ -431,21 +382,17 @@ def _build_prompt(date: str, url: str, variant: str, currency: str, image_url: s
 		'"currency": "EUR", "struck_price": "", "reason": "<max 30 words, English>"}'
 	)
 
-
 def _parse_bool(value: object) -> bool | None:
 	if isinstance(value, bool):
 		return value
 	v = value.strip().lower() if isinstance(value, str) else ""
 	return v in ("true", "yes") if v in ("true", "yes", "false", "no") else None
 
-
 def _llm_cents(value: object) -> int | None:
-	# One allowed cleanup: spaces, "€" and "EUR" removed, then a final ",dd" becomes ".dd".
 	if not isinstance(value, str):
 		return None
 	s = _WS_RE.sub("", value).replace("€", "").replace("EUR", "")
 	return _parse_cents(re.sub(r",([0-9]{2})\Z", r".\1", s))
-
 
 def _parse_json(raw: object) -> dict:
 	if isinstance(raw, str):
@@ -457,7 +404,6 @@ def _parse_json(raw: object) -> dict:
 	if not isinstance(raw, dict):
 		raise _llm("bad json")
 	return raw
-
 
 def _normalize(raw: object) -> dict:
 	d = _parse_json(raw)
@@ -480,13 +426,11 @@ def _normalize(raw: object) -> dict:
 			"currency": currency, "struck": _cents_str(struck) if struck else "",
 			"reason": _clip(str(d.get("reason", "")), REASON_MAX)}
 
-
 def _header(headers: dict, name: str) -> str:
 	for key, value in headers.items():
 		if str(key).lower() == name:
 			return value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value)
 	return ""
-
 
 def _memento_ts(v: str) -> str:
 	# "Fri, 13 Nov 2026 17:26:14 GMT" -> "20261113172614"; "" if unreadable.
@@ -495,17 +439,14 @@ def _memento_ts(v: str) -> str:
 	t = _dt(int(m.group(3)), mo // 3 + 1, *(int(m.group(i)) for i in (1, 4, 5, 6))) if mo >= 0 and mo % 3 == 0 else None
 	return "" if t is None else _ts14(t)
 
-
 def _page_key(url: str) -> str:
 	m = _KEY_RE.fullmatch(url.strip())
 	host = re.sub(r":(80|443)$", "", m.group(1).lower()) if m else url.lower()
 	return (host[4:] if host.startswith("www.") else host) + (m.group(2).rstrip("/") if m else "")
 
-
 def _same_reading(leader: object, mine: dict) -> bool:
 	return isinstance(leader, dict) and all(
 		type(leader.get(k)) is type(mine[k]) and leader.get(k) == mine[k] for k in _SAME_KEYS)
-
 
 def _handle_leader_error(leaders_res, leader_fn) -> bool:
 	leader_msg = getattr(leaders_res, "message", "")
@@ -520,9 +461,6 @@ def _handle_leader_error(leaders_res, leader_fn) -> bool:
 	except Exception:
 		return False
 
-
-# --- Non-deterministic helpers (only called inside run_nondet_unsafe)
-
 def _web_get(url: str):
 	try:
 		return gl.nondet.web.get(url)
@@ -530,7 +468,6 @@ def _web_get(url: str):
 		raise
 	except Exception:
 		raise gl.vm.UserError(f"{ERROR_TRANSIENT} archive request failed")
-
 
 def _fetch(ts: str, url: str, lo: str, hi: str, image: bool) -> tuple[bytes, str]:
 	what, cap = ("image", "image capture") if image else ("page", "capture")
@@ -568,7 +505,6 @@ def _fetch(ts: str, url: str, lo: str, hi: str, image: bool) -> tuple[bytes, str
 		return body, ts
 	raise _ext("too many archive redirects")
 
-
 def _call_llm(prompt: str, image: bytes | None) -> object:
 	try:
 		if image is not None:
@@ -578,7 +514,6 @@ def _call_llm(prompt: str, image: bytes | None) -> object:
 		raise
 	except Exception:
 		raise _llm("LLM call failed")
-
 
 def _assess(kind: str, snapshot_ts: str, url: str, variant: str, currency: str,
 			image_url: str, lo: str, hi: str) -> dict:
@@ -602,7 +537,6 @@ def _assess(kind: str, snapshot_ts: str, url: str, variant: str, currency: str,
 	out.update(judged_ts=judged_ts, page_sha256=page_sha256, image_ts=image_ts, image_sha256=image_sha256)
 	return out
 
-
 class WasPrice(gl.Contract):
 	pledges: TreeMap[u256, Pledge]
 	promos: TreeMap[u256, Promo]
@@ -614,15 +548,30 @@ class WasPrice(gl.Contract):
 	open_by_challenger: TreeMap[Address, u32]
 	credits: TreeMap[Address, u256]
 	total_credits: u256
+	min_period: u64
 
-	def __init__(self):
+	def __init__(self, min_challenge_minutes: int):
+		lo, hi = CHALLENGE_MINUTES
+		if not lo <= min_challenge_minutes <= hi:
+			raise _expected(f"min_challenge_minutes must be between {lo} and {hi}")
+		self.min_period = u64(min_challenge_minutes * 60)
 		self.next_pledge = u256(0)
 		self.next_promo = u256(0)
 		self.next_challenge = u256(0)
 		self.total_credits = u256(0)
 
-	def _pledge(self, i: int) -> Pledge | None:
-		return self.pledges[u256(i)] if 0 <= i < int(self.next_pledge) else None
+	def _pledge(self, i: int) -> Pledge:
+		if not 0 <= i < int(self.next_pledge):
+			raise _expected("unknown pledge")
+		return self.pledges[u256(i)]
+
+	def _own(self, i: int, what: str) -> Pledge:
+		p = self._pledge(i)
+		if gl.message.sender_address != p.merchant:
+			raise _expected(f"only the merchant can {what} its pledge")
+		if not p.active:
+			raise _expected("pledge is not active")
+		return p
 
 	def _promo(self, i: int) -> Promo:
 		if not 0 <= i < int(self.next_promo):
@@ -642,13 +591,15 @@ class WasPrice(gl.Contract):
 			self.credits[a] = u256((int(self.credits[a]) if a in self.credits else 0) + amount)
 			self.total_credits = u256(int(self.total_credits) + amount)
 
+	def _status(self, r: Promo) -> str:
+		return CLOSED if r.status == LIVE and not r.open_challenge and _now() >= int(r.challenge_until) else r.status
 
 	def _check_declare(self, sender: Address, pledge_id: int, product_url: object, variant: object,
 					   was_price: object, promo_price: object, pct: int, promo_start: object,
-					   now: int) -> tuple[str, tuple]:
-		p = self._pledge(pledge_id)
-		if p is None:
+					   minutes: int, now: int) -> tuple[str, tuple]:
+		if not 0 <= pledge_id < int(self.next_pledge):
 			return _err("unknown pledge"), ()
+		p = self.pledges[u256(pledge_id)]
 		if sender != p.merchant:
 			return _err("only the merchant can declare promos"), ()
 		if not p.active:
@@ -676,7 +627,13 @@ class WasPrice(gl.Contract):
 			return _err("promo_start must be ISO 8601 UTC (YYYY-MM-DDTHH:MM:SSZ)"), ()
 		if start < now - START_PAST_MAX or start > now + START_FUTURE_MAX:
 			return _err("promo_start must be between 7 days ago and 30 days ahead"), ()
-		return "", (url, variant.strip(), was, promo, start)
+		lo, hi = int(self.min_period) // 60, CHALLENGE_MINUTES[1]
+		if not lo <= minutes <= hi:
+			return _err(f"challenge_minutes must be between {lo} and {hi}"), ()
+		until = max(now, start) + minutes * 60
+		if until > int(p.ends_at):
+			return _err(f"challenge period must end by the pledge end ({_iso(int(p.ends_at))})"), ()
+		return "", (url, variant.strip(), was, promo, start, until)
 
 	def _check_challenge(self, promo_id: int, snapshot_ts: object, kind: str, image_url: object,
 						 sender: Address, stake: int, now: int) -> tuple[str, str]:
@@ -684,14 +641,12 @@ class WasPrice(gl.Contract):
 			return _err("unknown promo"), ""
 		promo = self.promos[u256(promo_id)]
 		p = self.pledges[promo.pledge_id]
-		if not p.active:
-			return _err("pledge is not active"), ""
-		if now >= int(p.ends_at):
-			return _err("pledge coverage has ended"), ""
 		if sender == p.merchant:
 			return _err("the merchant cannot challenge its own promo"), ""
 		if promo.status != LIVE:
 			return _err("promo is already debunked"), ""
+		if now >= int(promo.challenge_until):
+			return _err(f"challenge period ended ({_iso(int(promo.challenge_until))})"), ""
 		image = ""
 		if kind == IMAGE:
 			image, err = _norm_url(image_url, "image_url")
@@ -731,7 +686,7 @@ class WasPrice(gl.Contract):
 		elif status == EXPIRED:
 			p.bond = u256(int(p.bond) + payout)
 			self._credit(c.challenger, stake)
-		else:  # REJECTED or EVIDENCE_NOT_FOUND: the lost stake grows the bond
+		else:
 			p.bond = u256(int(p.bond) + payout + stake)
 		if status != EXPIRED:
 			for ts in (c.snapshot_ts, c.judged_ts):
@@ -741,7 +696,6 @@ class WasPrice(gl.Contract):
 		c.reason = _clip(reason, REASON_MAX)
 		promo.open_challenge = False
 		self.open_by_challenger[c.challenger] = u32(max(0, self._open_count(c.challenger) - 1))
-
 
 	@gl.public.write.payable
 	def create_pledge(self, name: str, domain: str, payout: int, days: int) -> int:
@@ -753,7 +707,7 @@ class WasPrice(gl.Contract):
 		self.pledges[u256(i)] = Pledge(
 			merchant=gl.message.sender_address, name=_clean_name(name), domain=domain,
 			bond=u256(value), reserved=u256(0), payout=u256(payout), min_stake=u256(payout // 10),
-			created_at=u64(now), ends_at=u64(now + days * DAY), active=True, n_promos=u32(0),
+			created_at=u64(now), ends_at=u64(now + days * DAY), active=True, n_promos=u32(0), locked_until=u64(now),
 		)
 		self.next_pledge = u256(i + 1)
 		return i
@@ -761,13 +715,7 @@ class WasPrice(gl.Contract):
 	@gl.public.write.payable
 	def top_up(self, pledge_id: int) -> int:
 		value = int(gl.message.value)
-		p = self._pledge(pledge_id)
-		if p is None:
-			raise _expected("unknown pledge")
-		if gl.message.sender_address != p.merchant:
-			raise _expected("only the merchant can top up its pledge")
-		if not p.active:
-			raise _expected("pledge is not active")
+		p = self._own(pledge_id, "top up")
 		if value <= 0:
 			raise _expected("top-up value must be greater than 0")
 		p.bond = u256(int(p.bond) + value)
@@ -775,21 +723,23 @@ class WasPrice(gl.Contract):
 
 	@gl.public.write
 	def declare_promo(self, pledge_id: int, product_url: str, variant: str, was_price: str,
-					  promo_price: str, pct: int, promo_start: str) -> int:
+					  promo_price: str, pct: int, promo_start: str, challenge_minutes: int) -> int:
 		now = _now()
 		err, data = self._check_declare(gl.message.sender_address, pledge_id, product_url, variant,
-										 was_price, promo_price, pct, promo_start, now)
+										 was_price, promo_price, pct, promo_start, challenge_minutes, now)
 		if err != "":
 			raise gl.vm.UserError(err)
-		url, clean_variant, was, promo, start = data
+		url, clean_variant, was, promo, start, until = data
 		i = int(self.next_promo)
 		self.promos[u256(i)] = Promo(
 			pledge_id=u256(pledge_id), product_url=url, variant=clean_variant, currency=CURRENCIES[0],
 			was_cents=u64(was), promo_cents=u64(promo), pct=u32(pct), promo_start=u64(start),
-			declared_at=u64(now), status=LIVE, open_challenge=False, n_challenges=u32(0),
+			declared_at=u64(now), challenge_until=u64(until), status=LIVE, open_challenge=False,
+			n_challenges=u32(0),
 		)
 		p = self.pledges[u256(pledge_id)]
 		p.n_promos = u32(int(p.n_promos) + 1)
+		p.locked_until = u64(max(int(p.locked_until), until))
 		self.next_promo = u256(i + 1)
 		return i
 
@@ -893,15 +843,9 @@ class WasPrice(gl.Contract):
 
 	@gl.public.write
 	def close_pledge(self, pledge_id: int) -> str:
-		p = self._pledge(pledge_id)
-		if p is None:
-			raise _expected("unknown pledge")
-		if gl.message.sender_address != p.merchant:
-			raise _expected("only the merchant can close its pledge")
-		if not p.active:
-			raise _expected("pledge is not active")
-		if _now() < int(p.ends_at):
-			raise _expected("coverage has not ended")
+		p = self._own(pledge_id, "close")
+		if _now() < int(p.locked_until):
+			raise _expected(f"a promo challenge period is open until {_iso(int(p.locked_until))}")
 		if int(p.reserved) > 0:
 			raise _expected("a challenge is still open on this pledge")
 		amount = int(p.bond)
@@ -920,7 +864,6 @@ class WasPrice(gl.Contract):
 		_Recipient(sender).emit_transfer(value=u256(amount))
 		return amount
 
-
 	@gl.public.view
 	def preview_pledge(self, sender: str, name: str, domain: str, payout_wei: str, days: int,
 					   value_wei: str) -> str:
@@ -933,12 +876,13 @@ class WasPrice(gl.Contract):
 
 	@gl.public.view
 	def preview_declare(self, sender: str, pledge_id: int, product_url: str, variant: str,
-						was_price: str, promo_price: str, pct: int, promo_start: str) -> str:
+						was_price: str, promo_price: str, pct: int, promo_start: str,
+						challenge_minutes: int) -> str:
 		addr = _parse_address(sender)
 		if addr is None:
 			return _err("invalid sender address")
 		return self._check_declare(addr, pledge_id, product_url, variant, was_price, promo_price,
-								   pct, promo_start, _now())[0]
+								   pct, promo_start, challenge_minutes, _now())[0]
 
 	@gl.public.view
 	def preview_challenge(self, promo_id: int, snapshot_ts: str, challenger: str, stake_wei: str) -> str:
@@ -958,12 +902,12 @@ class WasPrice(gl.Contract):
 			return _err("amounts must be decimal strings of wei")
 		return self._check_challenge(promo_id, snapshot_ts, kind, image_url, addr, stake, _now())[0]
 
-
 	def _pledge_view(self, i: int, p: Pledge) -> dict:
 		return {"id": i, "merchant": p.merchant.as_hex, "name": p.name, "domain": p.domain,
 				"bond": str(int(p.bond)), "reserved": str(int(p.reserved)), "payout": str(int(p.payout)),
 				"min_stake": str(int(p.min_stake)), "created_at": _iso(int(p.created_at)),
-				"ends_at": _iso(int(p.ends_at)), "active": p.active, "n_promos": int(p.n_promos)}
+				"ends_at": _iso(int(p.ends_at)), "active": p.active, "n_promos": int(p.n_promos),
+				"locked_until": _iso(int(p.locked_until))}
 
 	def _promo_view(self, i: int, r: Promo) -> dict:
 		start = int(r.promo_start)
@@ -971,8 +915,9 @@ class WasPrice(gl.Contract):
 				"variant": r.variant, "currency": r.currency, "was_price": _cents_str(int(r.was_cents)),
 				"promo_price": _cents_str(int(r.promo_cents)), "pct": int(r.pct),
 				"promo_start": _iso(start), "declared_at": _iso(int(r.declared_at)),
+				"challenge_until": _iso(int(r.challenge_until)),
 				"window_from_ts": _ts14(start - PRIOR_WINDOW), "window_to_ts": _ts14(start),
-				"status": r.status, "open_challenge": r.open_challenge, "n_challenges": int(r.n_challenges)}
+				"status": self._status(r), "open_challenge": r.open_challenge, "n_challenges": int(r.n_challenges)}
 
 	def _challenge_view(self, i: int, c: Challenge) -> dict:
 		seen = int(c.observed_cents)
@@ -987,10 +932,7 @@ class WasPrice(gl.Contract):
 
 	@gl.public.view
 	def get_pledge(self, pledge_id: int) -> str:
-		p = self._pledge(pledge_id)
-		if p is None:
-			raise _expected("unknown pledge")
-		return json.dumps(self._pledge_view(pledge_id, p))
+		return json.dumps(self._pledge_view(pledge_id, self._pledge(pledge_id)))
 
 	@gl.public.view
 	def get_promo(self, promo_id: int) -> str:
@@ -1002,8 +944,7 @@ class WasPrice(gl.Contract):
 
 	@gl.public.view
 	def list_promos(self, pledge_id: int, offset: int, limit: int) -> str:
-		if self._pledge(pledge_id) is None:
-			raise _expected("unknown pledge")
+		self._pledge(pledge_id)
 		if offset < 0 or limit < 1 or limit > LIST_MAX:
 			raise _expected(f"offset must be >= 0 and limit between 1 and {LIST_MAX}")
 		out = [self._promo_view(i, r) for i in range(int(self.next_promo))
@@ -1027,22 +968,17 @@ class WasPrice(gl.Contract):
 	def get_stats(self) -> str:
 		return json.dumps({"pledges": int(self.next_pledge), "promos": int(self.next_promo),
 						   "challenges": int(self.next_challenge),
-						   "total_credits": str(int(self.total_credits)), "rule": RULE_ID})
+						   "total_credits": str(int(self.total_credits)), "rule": RULE_ID,
+						   "min_challenge_minutes": int(self.min_period) // 60,
+						   "max_challenge_minutes": CHALLENGE_MINUTES[1]})
 
 	@gl.public.view
 	def get_rule(self) -> str:
 		return RULE_TEXT
 
 	@gl.public.view
-	def promo_window(self, promo_id: int) -> str:
-		r = self._promo(promo_id)
-		start = int(r.promo_start)
-		return json.dumps({"from_ts": _ts14(start - PRIOR_WINDOW), "to_ts": _ts14(start),
-						   "wayback_calendar": f"{ARCHIVE}{_ts14(start - PRIOR_WINDOW)}*/{r.product_url}"})
-
-	@gl.public.view
 	def promo_status(self, promo_id: int) -> str:
-		return self._promo(promo_id).status
+		return self._status(self._promo(promo_id))
 
 	@gl.public.view
 	def standing(self, merchant: str) -> str:

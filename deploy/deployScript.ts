@@ -10,13 +10,16 @@ import { localnet, studionet } from "genlayer-js/chains";
 const EXECUTION_OK = new Set(["SUCCESS", "FINISHED_WITH_RETURN"]);
 const APPLIED = new Set(["ACCEPTED", "FINALIZED"]);
 
-/** Run by `genlayer deploy` without --contract: deploys WasPrice with no constructor argument. */
+/** Minimum challenge period of every promo, in minutes (constructor argument): 7 days. */
+const MIN_CHALLENGE_MINUTES = 7 * 1440;
+
+/** Run by `genlayer deploy` without --contract: deploys WasPrice with a 7-day minimum challenge period. */
 export default async function main(client: GenLayerClient<any>) {
   const contractCode = new Uint8Array(readFileSync(path.resolve(process.cwd(), "contracts/was_price.py")));
 
   await client.initializeConsensusSmartContract();
 
-  const hash = (await client.deployContract({ code: contractCode, args: [] })) as TransactionHash;
+  const hash = (await client.deployContract({ code: contractCode, args: [MIN_CHALLENGE_MINUTES] })) as TransactionHash;
   console.log(`Deploy transaction: ${hash}`);
 
   const receipt = await client.waitForTransactionReceipt({ hash, status: TransactionStatus.ACCEPTED, retries: 200 });

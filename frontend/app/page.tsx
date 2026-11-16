@@ -57,13 +57,13 @@ export default function Home() {
             </h3>
             <p className="muted">
               Bond {formatGen(pledge.bond)} available, {formatGen(pledge.reserved)} reserved · payout {formatGen(pledge.payout)} per
-              upheld challenge · until {pledge.ends_at} · merchant{" "}
+              upheld challenge · until {pledge.ends_at} · bond locked until {pledge.locked_until} · merchant{" "}
               <Link href={`/merchant/?addr=${pledge.merchant}`}>{shortAddress(pledge.merchant)}</Link>
               {!pledge.active && " · closed"}
             </p>
             <table>
               <thead>
-                <tr><th>Product page</th><th>Was → now</th><th>Status</th><th>Promo start</th></tr>
+                <tr><th>Product page</th><th>Was → now</th><th>Status</th><th>Promo start</th><th>Challenges until</th></tr>
               </thead>
               <tbody>
                 {promos.map((p) => (
@@ -72,6 +72,7 @@ export default function Home() {
                     <td><s>{p.was_price}</s> {p.promo_price} {p.currency}{p.pct ? ` (-${p.pct} %)` : ""}</td>
                     <td><Badge status={p.status} /></td>
                     <td>{p.promo_start}</td>
+                    <td>{p.challenge_until}</td>
                   </tr>
                 ))}
               </tbody>

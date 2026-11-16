@@ -67,17 +67,18 @@ The demo shop pages are evidence for the Wayback Machine. Their order matters:
    to the file in the repository).
 3. **v2 pages**: copy `tests/fixtures/v2/*.html` to `docs/demo/`, update `docs/demo/SHA256SUMS`,
    commit, push. Pages now shows the promotions (struck price, then promo price).
-4. **Deploy** with timbre-a: `node --env-file-if-exists=.env scripts/wasprice.ts deploy`, then put
-   `WASPRICE_CONTRACT=0x...` in `.env` and in the Pages variable.
-5. **Pledge and declare** with timbre-a (`promo_start = now`):
+4. **Deploy** with timbre-a: `node --env-file-if-exists=.env scripts/wasprice.ts deploy`
+   (minimum challenge period 7 days; add `--min-challenge-minutes 10` for a live demo of the
+   period), then put `WASPRICE_CONTRACT=0x...` in `.env` and in the Pages variable.
+5. **Pledge and declare** with timbre-a (`promo_start = now`, a 7-day challenge period each):
 
    ```powershell
    node --env-file-if-exists=.env scripts/wasprice.ts pledge DemoMaison mcurly17.github.io 0.1 30 --value 0.5
-   node --env-file-if-exists=.env scripts/wasprice.ts declare 0 https://mcurly17.github.io/wasprice/demo/bouilloire.html 39.90 34.90 now --pct 13
-   node --env-file-if-exists=.env scripts/wasprice.ts declare 0 https://mcurly17.github.io/wasprice/demo/theiere.html 39.90 31.90 now --pct 20
-   node --env-file-if-exists=.env scripts/wasprice.ts declare 0 https://mcurly17.github.io/wasprice/demo/mug.html 12.90 9.90 now --pct 23
-   node --env-file-if-exists=.env scripts/wasprice.ts declare 0 https://mcurly17.github.io/wasprice/demo/grille-pain.html 39.90 29.90 now --pct 25
-   node --env-file-if-exists=.env scripts/wasprice.ts declare 0 https://mcurly17.github.io/wasprice/demo/radio.html 34.90 29.90 now --pct 14
+   node --env-file-if-exists=.env scripts/wasprice.ts declare 0 https://mcurly17.github.io/wasprice/demo/bouilloire.html 39.90 34.90 now --pct 13 --challenge-minutes 10080
+   node --env-file-if-exists=.env scripts/wasprice.ts declare 0 https://mcurly17.github.io/wasprice/demo/theiere.html 39.90 31.90 now --pct 20 --challenge-minutes 10080
+   node --env-file-if-exists=.env scripts/wasprice.ts declare 0 https://mcurly17.github.io/wasprice/demo/mug.html 12.90 9.90 now --pct 23 --challenge-minutes 10080
+   node --env-file-if-exists=.env scripts/wasprice.ts declare 0 https://mcurly17.github.io/wasprice/demo/grille-pain.html 39.90 29.90 now --pct 25 --challenge-minutes 10080
+   node --env-file-if-exists=.env scripts/wasprice.ts declare 0 https://mcurly17.github.io/wasprice/demo/radio.html 34.90 29.90 now --pct 14 --challenge-minutes 10080
    ```
 
 6. **Save Page Now of `mug.html`**, after the declarations. Check that
@@ -92,6 +93,9 @@ The demo shop pages are evidence for the Wayback Machine. Their order matters:
    `wait <hash>`; on `[TRANSIENT]` resolve again later.
 8. **Reads**: `challenge-info <id>`, `promo <id>`, `standing 0xf5Fe96d62733d40f25822b20C5E46A0E17483dFF`,
    `credit 0x74115084812fc662AaAE47B5Fd4Ef60cd5E7BC56`; then `withdraw` with timbre-b.
-   `close` is possible only after the 30 days of the pledge.
+   `close` is possible once every challenge period of the pledge has ended (`locked_until` in
+   `pledge-info`) and no challenge is open; `window <promo_id>` shows a promo's period.
+   To record an expected refusal on-chain (no value attached), add `--expect-refusal` to
+   `close`, `challenge` or `challenge-image`; the script sends only if its check refuses.
 
 A verdict that differs from the expected one is recorded as it is in `docs/evidence.md`.

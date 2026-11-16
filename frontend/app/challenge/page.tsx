@@ -31,7 +31,10 @@ function ChallengeForm() {
 
   let localError = "";
   if (!promo.data) localError = "Choose a promo.";
-  else if (promo.data.status !== "LIVE") localError = "This promo is already debunked.";
+  else if (promo.data.status === "DEBUNKED") localError = "This promo is already debunked.";
+  else if (promo.data.status === "CLOSED" || Date.now() >= Date.parse(promo.data.challenge_until)) {
+    localError = `The challenge period of this promo ended at ${promo.data.challenge_until}.`;
+  }
   else if (ts === "") localError = "Paste a Wayback link or a 14-digit timestamp.";
   else if (start !== null) localError = checkSnapshot(ts, start, Math.floor(Date.now() / 1000));
   if (localError === "" && link && promo.data && !samePage(link.url, promo.data.product_url)) {
@@ -83,7 +86,8 @@ function ChallengeForm() {
           <p className="hint">
             <Badge status={promo.data.status} /> {promo.data.product_url} · was {promo.data.was_price} {promo.data.currency} · window{" "}
             {w && `${formatTs14(w.fromTs)} → ${formatTs14(w.toTs)} (excluded)`} ·{" "}
-            {start !== null && <a href={waybackCalendar(start, promo.data.product_url)}>Wayback calendar</a>} ·{" "}
+            {start !== null && <a href={waybackCalendar(start, promo.data.product_url)}>Wayback calendar</a>} · challenges until{" "}
+            {promo.data.challenge_until} ·{" "}
             <Link href={`/promo/?id=${promo.data.id}`}>promo page</Link>
           </p>
         ) : promoId !== null ? (

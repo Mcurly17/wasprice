@@ -19,12 +19,17 @@ export type Precheck =
 export type Plan =
   | { kind: "help" }
   | { kind: "config" }
-  | { kind: "deploy" }
+  | { kind: "deploy"; minChallengeMinutes: number }
+  | { kind: "window"; promoId: number }
   | { kind: "wait"; hash: `0x${string}` }
   | { kind: "price-check"; raw: string; cents: number }
   | { kind: "read"; functionName: string; args: CallArg[] }
   | { kind: "snapshot"; url: string; ts: string; promoId?: number }
-  | { kind: "write"; command: string; functionName: string; args: CallArg[]; value: bigint; precheck: Precheck; notes: string[] };
+  | {
+      kind: "write"; command: string; functionName: string; args: CallArg[]; value: bigint; precheck: Precheck; notes: string[];
+      /** Demo evidence: send a call the contract refuses, with no value, to record the refusal on-chain. */
+      expectRefusal: boolean;
+    };
 
 export interface PlanEnv {
   now: Date;
@@ -42,16 +47,18 @@ Reads (no account, no password):
   price-check <price>                          local strict parser (39.90 only)
 
 Writes (signed with the active genlayer CLI account; the keystore password is typed here):
-  deploy
+  deploy [--min-challenge-minutes <n>]           default 10080 (7 days); 10 to 129600
   pledge <name> <domain> <payout_gen> <days> --value <bond_GEN>
   top-up <pledge_id> --value <GEN>
-  declare <pledge_id> <product_url> <was> <promo> <start_iso|now> [--pct <n>] [--variant-file <file>]
+  declare <pledge_id> <product_url> <was> <promo> <start_iso|now> --challenge-minutes <n> [--pct <n>] [--variant-file <file>]
   challenge <promo_id> <ts14> --value <stake_GEN>
   challenge-image <promo_id> <ts14> <image_url> --value <stake_GEN>
   resolve <challenge_id> | expire <challenge_id> | close <pledge_id> | withdraw
 
 Every write is checked first (its preview_* view, or a read of the current state) and is not
 sent if the contract would refuse it: on Studionet a refused payable call keeps its value.
+--expect-refusal (close, challenge, challenge-image) does the opposite, to record a refusal
+on-chain as evidence: it sends only a call the check refuses, and never with a value.
 Amounts are GEN decimals read only from --value. Prices are written 39.90 (in PowerShell an
 unquoted 39,90 is an array). Select the signer with: npx genlayer account use <name>
 env: GENLAYER_NETWORK (studionet or localnet), WASPRICE_CONTRACT`;
@@ -59,6 +66,10 @@ env: GENLAYER_NETWORK (studionet or localnet), WASPRICE_CONTRACT`;
 const HASH_RE = /^0x[0-9a-fA-F]{64}$/;
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const TS14_RE = /^[0-9]{14}$/;
+/** Challenge period bounds of the contract, in minutes; deploy uses 7 days unless told otherwise. */
+export const CHALLENGE_MINUTES = { min: 10, max: 90 * 1440, deployDefault: 7 * 1440 };
+/** Writes whose refusal can be recorded on-chain: no value is ever attached to them. */
+const REFUSABLE = new Set(["close", "challenge", "challenge-image"]);
 
 function int(value: string, what: string): number {
   if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) {
@@ -109,6 +120,14 @@ function takeOptions(argv: string[], names: string[]): { args: string[]; options
   return { args, options };
 }
 
+function minutes(value: string, what: string): number {
+  const n = int(value, what);
+  if (n < CHALLENGE_MINUTES.min || n > CHALLENGE_MINUTES.max) {
+    throw new Error(`${what} must be between ${CHALLENGE_MINUTES.min} and ${CHALLENGE_MINUTES.max} minutes, got: ${value}`);
+  }
+  return n;
+}
+
 function read(command: string, args: string[], functionName: string, shape: string, map: (a: string[]) => CallArg[]): Plan {
   expect(command, args, shape === "" ? 0 : shape.split(" ").length, shape);
   return { kind: "read", functionName, args: map(args) };
@@ -118,10 +137,21 @@ export function planCommand(argv: string[], env: PlanEnv): Plan {
   const [command, ...rest] = argv;
   if (!command || command === "help" || command === "--help" || command === "-h") return { kind: "help" };
 
-  const split = splitValueFlag(rest);
-  const value = payableWei(command, split.value);
-  const allowed = command === "declare" ? ["pct", "variant-file"] : command === "snapshot" ? ["promo"] : [];
+  const refusals = rest.filter((a) => a === "--expect-refusal").length;
+  const split = splitValueFlag(rest.filter((a) => a !== "--expect-refusal"));
+  const expectRefusal = refusals > 0;
+  if (refusals > 1) throw new Error("--expect-refusal was given twice.");
+  if (expectRefusal && !REFUSABLE.has(command)) throw new Error(`--expect-refusal applies to ${[...REFUSABLE].join(", ")} only.`);
+  if (expectRefusal && split.value !== undefined) throw new Error("--expect-refusal never sends a value: drop --value.");
+  const value = expectRefusal ? 0n : payableWei(command, split.value);
+  const allowed =
+    command === "declare" ? ["pct", "variant-file", "challenge-minutes"]
+      : command === "snapshot" ? ["promo"]
+        : command === "deploy" ? ["min-challenge-minutes"] : [];
   const { args, options } = takeOptions(split.args, allowed);
+  const write = (functionName: string, callArgs: CallArg[], precheck: Precheck, notes: string[] = []): Plan => ({
+    kind: "write", command, functionName, args: callArgs, value, precheck, notes, expectRefusal,
+  });
 
   switch (command) {
     case "config":
@@ -136,7 +166,8 @@ export function planCommand(argv: string[], env: PlanEnv): Plan {
     case "promos":
       return read(command, args, "list_promos", "<pledge_id>", (a) => [int(a[0], "pledge_id"), 0, 50]);
     case "window":
-      return read(command, args, "promo_window", "<promo_id>", (a) => [int(a[0], "promo_id")]);
+      expect(command, args, 1, "<promo_id>");
+      return { kind: "window", promoId: int(args[0], "promo_id") };
     case "challenge-info":
       return read(command, args, "get_challenge", "<challenge_id>", (a) => [int(a[0], "challenge_id")]);
     case "challenges":
@@ -161,27 +192,26 @@ export function planCommand(argv: string[], env: PlanEnv): Plan {
       if (cents === null) throw new Error(priceHelp(args[0]));
       return { kind: "price-check", raw: args[0], cents };
     }
-    case "deploy":
-      expect(command, args, 0, "");
-      return { kind: "deploy" };
+    case "deploy": {
+      expect(command, args, 0, "[--min-challenge-minutes <n>]");
+      const m = options["min-challenge-minutes"];
+      return { kind: "deploy", minChallengeMinutes: m === undefined ? CHALLENGE_MINUTES.deployDefault : minutes(m, "--min-challenge-minutes") };
+    }
     case "pledge": {
       expect(command, args, 4, "<name> <domain> <payout_gen> <days> --value <bond_GEN>");
       const [name, domain, payoutGen, days] = args;
       const payout = parseGen(payoutGen);
       const d = int(days, "days");
-      return {
-        kind: "write", command, functionName: "create_pledge", args: [name, domain, payout, d], value,
-        precheck: { kind: "preview", functionName: "preview_pledge", args: [SIGNER, name, domain, payout.toString(), d, value.toString()] },
-        notes: [],
-      };
+      return write("create_pledge", [name, domain, payout, d],
+        { kind: "preview", functionName: "preview_pledge", args: [SIGNER, name, domain, payout.toString(), d, value.toString()] });
     }
     case "top-up": {
       expect(command, args, 1, "<pledge_id> --value <GEN>");
       const pledgeId = int(args[0], "pledge_id");
-      return { kind: "write", command, functionName: "top_up", args: [pledgeId], value, precheck: { kind: "top-up", pledgeId }, notes: [] };
+      return write("top_up", [pledgeId], { kind: "top-up", pledgeId });
     }
     case "declare": {
-      expect(command, args, 5, "<pledge_id> <product_url> <was> <promo> <start_iso|now> [--pct <n>] [--variant-file <file>]");
+      expect(command, args, 5, "<pledge_id> <product_url> <was> <promo> <start_iso|now> --challenge-minutes <n> [--pct <n>] [--variant-file <file>]");
       const pledgeId = int(args[0], "pledge_id");
       const url = args[1];
       const was = price(args[2], "was price");
@@ -205,12 +235,12 @@ export function planCommand(argv: string[], env: PlanEnv): Plan {
       if (options["variant-file"] !== undefined) {
         variant = env.readText(options["variant-file"]).replace(/^﻿/, "").trim();
       }
-      const callArgs: CallArg[] = [pledgeId, url, variant, was, promo, pct, start];
-      return {
-        kind: "write", command, functionName: "declare_promo", args: callArgs, value,
-        precheck: { kind: "preview", functionName: "preview_declare", args: [SIGNER, ...callArgs] },
-        notes,
-      };
+      if (options["challenge-minutes"] === undefined) {
+        throw new Error("declare needs --challenge-minutes <n>: how long the promo can be challenged (stats shows the contract minimum).");
+      }
+      const period = minutes(options["challenge-minutes"], "--challenge-minutes");
+      const callArgs: CallArg[] = [pledgeId, url, variant, was, promo, pct, start, period];
+      return write("declare_promo", callArgs, { kind: "preview", functionName: "preview_declare", args: [SIGNER, ...callArgs] }, notes);
     }
     case "challenge":
     case "challenge-image": {
@@ -219,29 +249,25 @@ export function planCommand(argv: string[], env: PlanEnv): Plan {
       const promoId = int(args[0], "promo_id");
       const ts = ts14(args[1]);
       const callArgs: CallArg[] = image ? [promoId, ts, args[2]] : [promoId, ts];
-      return {
-        kind: "write", command, functionName: image ? "challenge_image" : "challenge", args: callArgs, value,
-        precheck: {
-          kind: "window", promoId, ts,
-          preview: { functionName: image ? "preview_challenge_image" : "preview_challenge", args: [...callArgs, SIGNER, value.toString()] },
-        },
-        notes: [],
-      };
+      return write(image ? "challenge_image" : "challenge", callArgs, {
+        kind: "window", promoId, ts,
+        preview: { functionName: image ? "preview_challenge_image" : "preview_challenge", args: [...callArgs, SIGNER, value.toString()] },
+      });
     }
     case "resolve":
     case "expire": {
       expect(command, args, 1, "<challenge_id>");
       const challengeId = int(args[0], "challenge_id");
-      return { kind: "write", command, functionName: command, args: [challengeId], value, precheck: { kind: command, challengeId }, notes: [] };
+      return write(command, [challengeId], { kind: command, challengeId });
     }
     case "close": {
       expect(command, args, 1, "<pledge_id>");
       const pledgeId = int(args[0], "pledge_id");
-      return { kind: "write", command, functionName: "close_pledge", args: [pledgeId], value, precheck: { kind: "close", pledgeId }, notes: [] };
+      return write("close_pledge", [pledgeId], { kind: "close", pledgeId });
     }
     case "withdraw":
       expect(command, args, 0, "");
-      return { kind: "write", command, functionName: "withdraw", args: [], value, precheck: { kind: "withdraw" }, notes: [] };
+      return write("withdraw", [], { kind: "withdraw" });
     default:
       throw new Error(`Unknown command: ${command}. Run: node scripts/wasprice.ts help`);
   }

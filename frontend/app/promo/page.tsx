@@ -7,7 +7,7 @@ import { Badge, Loading, WindowTimeline } from "@/components/ui";
 import { checks, useChallenges, usePledge, usePromo, useWrite } from "@/lib/contracts/wasPrice";
 import type { ChallengeView, PromoView } from "@/lib/contracts/types";
 import { formatGen, formatTs14, shortAddress, verifyCommand, waybackView } from "@/lib/format";
-import { statusMeaning } from "@/lib/status";
+import { periodNote, statusMeaning } from "@/lib/status";
 import { isoToUnix, waybackCalendar } from "@/lib/window";
 
 function ChallengeRow({ c, promo }: { c: ChallengeView; promo: PromoView }) {
@@ -86,6 +86,12 @@ function PromoPage() {
         Declared {p.declared_at} · promo start {p.promo_start}
         {pledge.data && <> · {pledge.data.name}, payout {formatGen(pledge.data.payout)}, minimum stake {formatGen(pledge.data.min_stake)}</>}
       </p>
+      <h2>Challenge period</h2>
+      <p className={p.status === "LIVE" ? "notice good" : "notice"} role="status">{periodNote(p)}</p>
+      <p className="hint">
+        Fixed when the promo was declared, inside the pledge coverage. The merchant cannot recover the bond before the end of
+        the last challenge period of the pledge{pledge.data && <> ({pledge.data.locked_until})</>}, nor while a challenge is open.
+      </p>
       <h2>The 30-day window</h2>
       <WindowTimeline promoStart={p.promo_start} marks={(challenges.data ?? []).map((c) => ({ ts: c.judged_ts || c.snapshot_ts, status: c.status }))} />
       <p>
@@ -93,7 +99,7 @@ function PromoPage() {
         struck price unsupported.{" "}
         {start !== null && <a href={waybackCalendar(start, p.product_url)}>Open the Wayback calendar of the window</a>}
       </p>
-      {p.status === "LIVE" && !p.open_challenge && (
+      {p.status === "LIVE" && !p.open_challenge && Date.now() < Date.parse(p.challenge_until) && (
         <p><Link className="button" href={`/challenge/?promo=${p.id}`}>Challenge</Link></p>
       )}
       {p.open_challenge && <p className="muted">A challenge is open on this promo; one at a time.</p>}

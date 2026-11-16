@@ -1,12 +1,13 @@
 // Labels and tones of promo and challenge states. Pure: tested with node:test.
 
-export type PromoStatus = "LIVE" | "DEBUNKED";
+export type PromoStatus = "LIVE" | "DEBUNKED" | "CLOSED";
 export type ChallengeStatus = "OPEN" | "UPHELD" | "REJECTED" | "EVIDENCE_NOT_FOUND" | "EXPIRED";
 export type Tone = "neutral" | "good" | "bad" | "warn";
 
 const LABELS: Record<string, string> = {
   LIVE: "Live",
   DEBUNKED: "Debunked",
+  CLOSED: "Closed",
   OPEN: "Open",
   UPHELD: "Upheld",
   REJECTED: "Rejected",
@@ -17,6 +18,7 @@ const LABELS: Record<string, string> = {
 const TONES: Record<string, Tone> = {
   LIVE: "good",
   DEBUNKED: "bad",
+  CLOSED: "neutral",
   OPEN: "warn",
   UPHELD: "bad",
   REJECTED: "good",
@@ -43,4 +45,12 @@ export function statusTone(status: string): Tone {
 
 export function statusMeaning(status: string): string {
   return MEANINGS[status] ?? "";
+}
+
+/** One sentence on the challenge period of a promo, for the promo and challenge pages. */
+export function periodNote(promo: { status: string; open_challenge: boolean; challenge_until: string }): string {
+  if (promo.status === "CLOSED") return `The challenge period ended at ${promo.challenge_until}: this promo can no longer be challenged.`;
+  if (promo.status === "DEBUNKED") return "This promo was debunked: no further challenge.";
+  if (promo.open_challenge) return `A challenge filed in time is open; the period ends at ${promo.challenge_until}.`;
+  return `Open to challenges until ${promo.challenge_until} (excluded).`;
 }

@@ -10,9 +10,9 @@ sequenceDiagram
     participant V as Validators
     participant W as Wayback Machine
     M->>C: create_pledge (payable: bond, payout, days)
-    M->>C: declare_promo (url, was, promo, pct, promo_start)
-    Note over C: no web or AI call: format, domain, % and dates checked
-    X->>C: preview_challenge (view) then challenge (payable: stake, snapshot_ts)
+    M->>C: declare_promo (url, was, promo, pct, promo_start, challenge_minutes)
+    Note over C: no web or AI call: format, domain, % and dates checked; challenge_until fixed, <= ends_at
+    X->>C: preview_challenge (view) then challenge (payable: stake, snapshot_ts), before challenge_until
     Note over C: no web or AI call: window [start - 30 d, start), payout reserved
     X->>C: resolve (anyone)
     C->>V: run_nondet_unsafe(leader_fn, validator_fn)
@@ -23,6 +23,7 @@ sequenceDiagram
     Note over C: deterministic decision: observed < was ?
     C->>C: settle (credits, bond, decided keys)
     X->>C: withdraw (pull: credit zeroed, then emit_transfer)
+    M->>C: close_pledge, after locked_until and with nothing reserved, then withdraw
 ```
 
 The boundary:
@@ -46,21 +47,48 @@ Wayback toolbar or URL rewriting. Every validator receives the same bytes, so:
 Hidden elements are removed from that text before the model sees it, so the reading follows
 what a customer saw, not what a merchant hid for machines.
 
+## Challenge periods and the bond lock (v1.2)
+
+Time comes only from `datetime.now(timezone.utc)`, the transaction time already used for the
+window and the deadlines: the same value on every validator.
+
+- The deployer fixes `min_period` (constructor `min_challenge_minutes`, 10 to 129,600). The
+  script deploys with 7 days unless `--min-challenge-minutes` is given; the Studionet demo of
+  v1.2 uses the 10-minute floor.
+- `declare_promo` computes `challenge_until = max(now, promo_start) + challenge_minutes * 60`
+  with `challenge_minutes` in [`min_period`, 90 days], refuses it after `ends_at`, stores it on
+  the promo and raises the pledge's `locked_until` to it (the latest period of the pledge).
+- `challenge` and `challenge_image` refuse `now >= challenge_until`. A challenge filed in time
+  keeps its own 3-day resolution window.
+- The promo status is derived on read: a stored `LIVE` with no open challenge and
+  `now >= challenge_until` is returned as `CLOSED` by `get_promo`, `list_promos` and
+  `promo_status`. No write is needed to close a promo, so it cannot stay `LIVE` because nobody
+  called something.
+- `close_pledge` is the only way for the merchant to recover the bond: it requires
+  `now >= locked_until` and `reserved == 0`. Since every `challenge_until <= ends_at`, closing
+  never cuts a period short; it may happen before `ends_at` once every period is over.
+  A closed pledge only has closed or debunked promos, so the solvency invariant holds: a
+  challenge can still only be opened on an active pledge.
+
 ## Storage
 
 `Pledge`, `Promo` and `Challenge` dataclasses in `TreeMap[u256, ...]`, plus
 `decided: TreeMap[str, bool]` (`promo:ts:kind:image_url` already judged, for both the filed and
 the judged timestamp), `open_by_challenger`, `credits` and `total_credits`. `bond` is the
-available part of the pledge; `reserved` holds one payout per OPEN challenge. No page or image
-is stored: only URLs, timestamps and hashes.
+available part of the pledge; `reserved` holds one payout per OPEN challenge; `locked_until`
+is the end of its latest challenge period. Each promo stores its `challenge_until`, and the
+contract stores `min_period` (seconds). No page or image is stored: only URLs, timestamps and
+hashes.
 
 ## Size
 
-`contracts/was_price.py` is 39,907 bytes in v1.1.0 (39,713 in v1.0.0; target < 40,000, a
-margin target, not a documented limit). To get there without behavior changes the file uses tab indentation (as the GenLayer
-SDK sources do) and non-essential comments were removed (cut 1 of the size plan). Cuts 2 to 4
-(`promo_window` moved to the client, hints reduced to JSON-LD, image path removed) were not
-needed.
+`contracts/was_price.py` is 39,904 bytes in v1.2.0 (39,907 in v1.1.0, 39,713 in v1.0.0;
+target < 40,000, a margin target, not a documented limit). The file uses tab indentation (as
+the GenLayer SDK sources do) and non-essential comments were removed (cut 1 of the size plan).
+To fit the challenge periods, v1.2 also applied cut 2 (the `promo_window` view moved to the
+script and the web app, which compute it from `get_promo`) and cut 3 (structured hints reduced
+to JSON-LD; no demo page uses microdata or Open Graph prices), and merged the merchant checks
+of `top_up` and `close_pledge`. Cut 4 (image path removed) was not needed.
 
 ## Verified platform facts
 
@@ -114,5 +142,7 @@ Read on docs.genlayer.com on 2026-11-13, and exercised by the direct tests (genl
   (a few minutes observed on GreenClaim Bond).
 - TODO(verify): "at most 2 images per prompt" is taken from the Calling LLMs page as read on
   2026-11-13; the contract sends one image.
+- The challenge period of a promo is chosen by the merchant above the deployment minimum; the
+  Studionet demo deployment uses the 10-minute floor, a production deployment the 7-day default.
 - Hidden-element removal on the demo page D is covered by
   `tests/direct/test_was_price_judge.py::test_case_d_traps_are_hidden_or_neutralized` (closed).

@@ -95,7 +95,7 @@ const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
  * error or a not-yet-indexed hash is retried, the transaction is never re-sent. Success means
  * ACCEPTED or FINALIZED, MAJORITY_AGREE and SUCCESS.
  */
-async function settle(hash: TransactionHash, command: string): Promise<Record<string, any> | null> {
+async function settle(hash: TransactionHash, command: string, expectRefusal = false): Promise<Record<string, any> | null> {
   console.log(`Transaction: ${hash}\nExplorer: https://explorer-studio.genlayer.com/tx/${hash}`);
   const client = await readClient();
   for (let attempt = 0; attempt < waitRetries(command); attempt++) {
@@ -112,7 +112,13 @@ async function settle(hash: TransactionHash, command: string): Promise<Record<st
           ...(outcome.message ? { message: outcome.message } : {}),
           ...(outcome.keptValue ? { keptValueWei: outcome.keptValue } : {}),
         });
-        if (outcome.kind !== "success") process.exitCode = 1;
+        if (expectRefusal) {
+          const refused = outcome.kind === "failed" && outcome.failure === "execution" && outcome.errorCode === "EXPECTED";
+          console.log(refused ? "Refused on-chain, as expected." : "Expected an [EXPECTED] refusal, got another outcome.");
+          if (!refused) process.exitCode = 1;
+        } else if (outcome.kind !== "success") {
+          process.exitCode = 1;
+        }
         return tx as Record<string, any>;
       }
     } catch {
@@ -127,55 +133,70 @@ async function settle(hash: TransactionHash, command: string): Promise<Record<st
 
 const now = () => Math.floor(Date.now() / 1000);
 
-/** Throws when the contract would refuse the write right now; prints what it checked. */
-async function precheck(check: Precheck, signer: string, name: string): Promise<void> {
-  const refuse = (msg: string) => {
-    throw new CliError(`Not sent: the contract would refuse this call for ${name} ${signer}: ${msg}`);
-  };
+/**
+ * Returns why the contract would refuse the write right now ("" if it would accept it) and
+ * prints what it checked. State-read checks use the contract's own [EXPECTED] wording.
+ */
+async function precheck(check: Precheck, signer: string): Promise<string> {
   switch (check.kind) {
-    case "preview": {
-      const msg = await call(check.functionName, withSigner(check.args, signer));
-      if (msg !== "") refuse(String(msg));
-      return;
-    }
+    case "preview":
+      return String(await call(check.functionName, withSigner(check.args, signer)));
     case "window": {
       const promo = await readJson("get_promo", [check.promoId]);
       const start = isoToUnix(String(promo.promo_start));
-      if (start === null) refuse("unreadable promo_start");
-      const w = windowOf(start!);
-      console.log(`Promo ${check.promoId}: ${promo.product_url} was ${promo.was_price} ${promo.currency}`);
+      if (start === null) return "unreadable promo_start";
+      const w = windowOf(start);
+      console.log(`Promo ${check.promoId}: ${promo.product_url} was ${promo.was_price} ${promo.currency}, status ${promo.status}`);
       console.log(`Window: [${w.fromTs}, ${w.toTs}) (30 days before promo_start ${promo.promo_start})`);
-      const local = checkSnapshot(check.ts, start!, now());
-      if (local !== "") refuse(local);
-      const msg = await call(check.preview.functionName, withSigner(check.preview.args, signer));
-      if (msg !== "") refuse(String(msg));
-      return;
+      console.log(`Challenge period: until ${promo.challenge_until}`);
+      // The contract's preview decides; the local window check only adds a clearer hint first.
+      const msg = String(await call(check.preview.functionName, withSigner(check.preview.args, signer)));
+      return msg !== "" ? msg : checkSnapshot(check.ts, start, now());
     }
     case "top-up":
     case "close": {
       const p = await readJson("get_pledge", [check.pledgeId]);
-      if (String(p.merchant).toLowerCase() !== signer.toLowerCase()) refuse(`only the merchant ${p.merchant} can ${check.kind} this pledge`);
-      if (p.active !== true) refuse("pledge is not active");
-      if (check.kind === "close" && isoToUnix(p.ends_at)! > now()) refuse(`coverage has not ended (ends_at ${p.ends_at})`);
-      if (check.kind === "close" && p.reserved !== "0") refuse("a challenge is still open on this pledge");
-      return;
+      const what = check.kind === "close" ? "close" : "top up";
+      if (String(p.merchant).toLowerCase() !== signer.toLowerCase()) return `[EXPECTED] only the merchant can ${what} its pledge`;
+      if (p.active !== true) return "[EXPECTED] pledge is not active";
+      if (check.kind === "close") {
+        console.log(`Bond ${formatGen(BigInt(p.bond))} GEN, locked until ${p.locked_until}`);
+        if (isoToUnix(p.locked_until)! > now()) return `[EXPECTED] a promo challenge period is open until ${p.locked_until}`;
+        if (p.reserved !== "0") return "[EXPECTED] a challenge is still open on this pledge";
+      }
+      return "";
     }
     case "resolve":
     case "expire": {
       const c = await readJson("get_challenge", [check.challengeId]);
-      if (c.status !== "OPEN") refuse(`challenge is ${c.status}`);
+      if (c.status !== "OPEN") return `challenge is ${c.status}`;
       const late = now() >= isoToUnix(c.resolve_deadline)!;
-      if (check.kind === "resolve" && late) refuse(`resolution window closed at ${c.resolve_deadline}, call expire`);
-      if (check.kind === "expire" && !late) refuse(`resolution window still open until ${c.resolve_deadline}`);
-      return;
+      if (check.kind === "resolve" && late) return `resolution window closed at ${c.resolve_deadline}, call expire`;
+      if (check.kind === "expire" && !late) return `resolution window still open until ${c.resolve_deadline}`;
+      return "";
     }
     case "withdraw": {
       const credit = await readJson("get_credit", [signer]);
-      if (credit.credit === "0") refuse("nothing to withdraw");
+      if (credit.credit === "0") return "[EXPECTED] nothing to withdraw";
       console.log(`Credit: ${formatGen(BigInt(credit.credit))} GEN`);
-      return;
+      return "";
     }
   }
+}
+
+/** Promo window and challenge period, computed here from get_promo (no contract view needed). */
+async function promoWindow(promoId: number): Promise<void> {
+  const promo = await readJson("get_promo", [promoId]);
+  const w = windowOf(isoToUnix(String(promo.promo_start))!);
+  print({
+    promo_id: promoId,
+    status: promo.status,
+    from_ts: w.fromTs,
+    to_ts: w.toTs,
+    wayback_calendar: `https://web.archive.org/web/${w.fromTs}*/${promo.product_url}`,
+    challenge_until: promo.challenge_until,
+    challenge_open_now: promo.status === "LIVE" && !promo.open_challenge && now() < isoToUnix(promo.challenge_until)!,
+  });
 }
 
 async function snapshot(url: string, ts: string, promoId?: number): Promise<void> {
@@ -235,11 +256,17 @@ async function run(plan: Plan): Promise<void> {
     case "wait":
       await settle(plan.hash as TransactionHash, "wait");
       return;
+    case "window":
+      await promoWindow(plan.promoId);
+      return;
     case "deploy": {
       const stored = readActiveKeystore();
       console.log(`From ${stored.name} ${stored.address}`);
+      console.log(`Minimum challenge period: ${plan.minChallengeMinutes} minutes`);
       const client = await signingClient();
-      const hash = (await client.deployContract({ code: new Uint8Array(readFileSync(CONTRACT_PATH)), args: [] })) as TransactionHash;
+      const hash = (await client.deployContract({
+        code: new Uint8Array(readFileSync(CONTRACT_PATH)), args: [plan.minChallengeMinutes],
+      })) as TransactionHash;
       const tx = await settle(hash, "deploy");
       if (!tx || process.exitCode === 1) return;
       // Studio fills data.contract_address; genlayer-js 1.1.8 leaves txDataDecoded empty there.
@@ -256,11 +283,20 @@ async function run(plan: Plan): Promise<void> {
       console.log(`From ${stored.name} ${stored.address}`);
       for (const note of plan.notes) console.log(note);
       if (plan.value > 0n) console.log(`Value: ${formatGen(plan.value)} GEN`);
-      await precheck(plan.precheck, stored.address, stored.name);
-      console.log("Check passed: the contract would accept this call now.");
+      const refusal = await precheck(plan.precheck, stored.address);
+      if (plan.expectRefusal) {
+        if (refusal === "") {
+          throw new CliError("Not sent: the contract would accept this call now, and --expect-refusal only sends calls it refuses.");
+        }
+        if (plan.value !== 0n) throw new CliError("Not sent: --expect-refusal never attaches a value.");
+        console.log(`Expected refusal: ${refusal}\nSending it with no value, to record the refusal on-chain.`);
+      } else {
+        if (refusal !== "") throw new CliError(`Not sent: the contract would refuse this call for ${stored.name} ${stored.address}: ${refusal}`);
+        console.log("Check passed: the contract would accept this call now.");
+      }
       const client = await signingClient();
       const hash = (await client.writeContract({ address, functionName: plan.functionName, args: plan.args, value: plan.value })) as TransactionHash;
-      await settle(hash, plan.command);
+      await settle(hash, plan.command, plan.expectRefusal);
       return;
     }
   }

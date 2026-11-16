@@ -26,7 +26,7 @@ test("reads map to views with int ids and string addresses", () => {
   assert.deepEqual(plan("pledge-info", "0"), { kind: "read", functionName: "get_pledge", args: [0] });
   assert.deepEqual(plan("promo", "3"), { kind: "read", functionName: "get_promo", args: [3] });
   assert.deepEqual(plan("promos", "0"), { kind: "read", functionName: "list_promos", args: [0, 0, 50] });
-  assert.deepEqual(plan("window", "2"), { kind: "read", functionName: "promo_window", args: [2] });
+  assert.deepEqual(plan("window", "2"), { kind: "window", promoId: 2 });
   assert.deepEqual(plan("challenge-info", "1"), { kind: "read", functionName: "get_challenge", args: [1] });
   assert.deepEqual(plan("challenges", "1"), { kind: "read", functionName: "list_challenges", args: [1] });
   assert.deepEqual(plan("standing", A), { kind: "read", functionName: "standing", args: [A] });
@@ -50,16 +50,17 @@ test("pledge previews with the signer, the payout and the bond in wei strings", 
 });
 
 test("declare: now becomes ISO UTC, prices stay strings, --pct and --variant-file", () => {
-  const p = write(plan("declare", "0", `${BASE}bouilloire.html`, "39.90", "34.90", "now", "--pct", "13", "--variant-file", "variant.txt"));
+  const p = write(plan("declare", "0", `${BASE}bouilloire.html`, "39.90", "34.90", "now", "--pct", "13", "--variant-file", "variant.txt",
+    "--challenge-minutes", "60"));
   assert.equal(p.functionName, "declare_promo");
-  assert.deepEqual(p.args, [0, `${BASE}bouilloire.html`, "1,7 L, inox", "39.90", "34.90", 13, "2026-11-13T12:00:07Z"]);
+  assert.deepEqual(p.args, [0, `${BASE}bouilloire.html`, "1,7 L, inox", "39.90", "34.90", 13, "2026-11-13T12:00:07Z", 60]);
   assert.equal(p.value, 0n);
   assert.deepEqual(p.precheck, { kind: "preview", functionName: "preview_declare", args: [SIGNER, ...p.args] });
   assert.ok(p.notes.includes("promo_start = now = 2026-11-13T12:00:07Z"));
 });
 
 test("declare without --pct proposes the computed percentage and sends 0", () => {
-  const p = write(plan("declare", "0", `${BASE}theiere.html`, "39.90", "31.90", "2026-11-13T12:00:00Z"));
+  const p = write(plan("declare", "0", `${BASE}theiere.html`, "39.90", "31.90", "2026-11-13T12:00:00Z", "--challenge-minutes", "10"));
   assert.equal(p.args[5], 0);
   assert.ok(p.notes.some((n) => n.includes("--pct 20")));
 });
@@ -71,6 +72,35 @@ test("declare refuses 39,90 with the PowerShell hint, and bad dates", () => {
   assert.throws(() => plan("declare", "0", `${BASE}a.html`, "39.90", "34.90", "2026-11-13"), /ISO 8601 UTC/);
   assert.throws(() => plan("declare", "0", `${BASE}a.html`, "39.90", "34.90", "now", "--value", "1"), /applies to pledge/);
   assert.throws(() => plan("declare", "0", `${BASE}a.html`, "39.90", "34.90", "now", "--bogus", "1"), /Unknown option --bogus/);
+});
+
+test("declare needs a challenge period inside the contract bounds", () => {
+  const args = ["declare", "0", `${BASE}a.html`, "39.90", "34.90", "now"];
+  assert.throws(() => plan(...args), /needs --challenge-minutes/);
+  assert.throws(() => plan(...args, "--challenge-minutes", "9"), /between 10 and 129600 minutes/);
+  assert.throws(() => plan(...args, "--challenge-minutes", "129601"), /between 10 and 129600 minutes/);
+  assert.throws(() => plan(...args, "--challenge-minutes", "1.5"), /non-negative integer/);
+  assert.equal(write(plan(...args, "--challenge-minutes", "129600")).args[7], 129600);
+});
+
+test("deploy passes the minimum challenge period, 7 days by default", () => {
+  assert.deepEqual(plan("deploy"), { kind: "deploy", minChallengeMinutes: 10080 });
+  assert.deepEqual(plan("deploy", "--min-challenge-minutes", "10"), { kind: "deploy", minChallengeMinutes: 10 });
+  assert.throws(() => plan("deploy", "--min-challenge-minutes", "5"), /between 10 and 129600/);
+  assert.throws(() => plan("deploy", "10"), /expects 0 argument/);
+});
+
+test("--expect-refusal sends no value and only for close and challenges", () => {
+  const close = write(plan("close", "0", "--expect-refusal"));
+  assert.equal(close.expectRefusal, true);
+  assert.equal(close.value, 0n);
+  const late = write(plan("challenge", "1", "20261105100000", "--expect-refusal"));
+  assert.equal(late.value, 0n);
+  assert.deepEqual((late.precheck as { preview: { args: unknown[] } }).preview.args, [1, "20261105100000", SIGNER, "0"]);
+  assert.equal(write(plan("close", "0")).expectRefusal, false);
+  assert.throws(() => plan("challenge", "1", "20261105100000", "--expect-refusal", "--value", "0.01"), /never sends a value/);
+  assert.throws(() => plan("withdraw", "--expect-refusal"), /applies to close, challenge, challenge-image only/);
+  assert.throws(() => plan("close", "0", "--expect-refusal", "--expect-refusal"), /given twice/);
 });
 
 test("challenge and challenge-image check the window, then their preview", () => {
