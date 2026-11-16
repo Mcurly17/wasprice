@@ -160,6 +160,54 @@ Final state of the v1.1.0 contract:
 - timbre-b credit 0.11 GEN (0.01 + 0.1), withdrawn in full; `total_credits` 0.
 - Solvency: 0.2 bond + 0.02 stakes = 0.11 bond + 0.11 withdrawn.
 
+## v1.2.0: challenge periods and bond lock (2026-11-16)
+
+- Address: `0xb0530d4E845D79354Df3c0200272EFed6b2A1A25`
+- Explorer: <https://explorer-studio.genlayer.com/address/0xb0530d4E845D79354Df3c0200272EFed6b2A1A25>
+- Studio: <https://studio.genlayer.com/?import-contract=0xb0530d4E845D79354Df3c0200272EFed6b2A1A25>
+- Source: `contracts/was_price.py` at tag `v1.2.0` (39,904 bytes), same pinned runner, deployed
+  with `min_challenge_minutes = 10` (the floor, used so the whole period can be shown live; the
+  script's default is 7 days). `get_stats`: `min_challenge_minutes` 10, `max_challenge_minutes` 129600.
+- CI on `669b84d` (v1.2.0): <https://github.com/Mcurly17/wasprice/actions/runs/43891985267> (green);
+  Pages: <https://github.com/Mcurly17/wasprice/actions/runs/43891985298>
+
+Plan: one pledge, promo A (case A, 15-minute period) and promo B (honest teapot promo,
+10-minute period); a bond recovery attempt during the periods; case A challenged and resolved
+inside its period; a challenge on B after its period; B shown CLOSED; then the pledge closed
+and both credits withdrawn. The two refusals were sent on purpose with no value
+(`--expect-refusal`), after the script's check had predicted them, so that they are recorded
+on-chain.
+
+| Step | Transaction | Result |
+|---|---|---|
+| Deploy | [0x861a78ee…9093](https://explorer-studio.genlayer.com/tx/0x861a78ee9d05f0d20a85cfb3d6e988f7a90d05aea54b70d47583fad5037a9093) | WasPrice v1.2.0 deployed by timbre-a, minimum period 10 minutes |
+| Pledge 0 | [0xbb73024c…fa7c](https://explorer-studio.genlayer.com/tx/0xbb73024c85c4e948abb66a4fa44ebc586a337d227b9cf47cca8365175c77fa7c) | "DemoMaison", bond 0.2 GEN, payout 0.1, 7 days (ends 2026-11-23T15:06:04Z) |
+| Promo 0 (A) | [0x3ce6351c…cf45](https://explorer-studio.genlayer.com/tx/0x3ce6351c53d6cee241ecff7ef1441fe340f8f1d60d516283a6280b826b01cf45) | bouilloire 39.90 → 34.90, 13 %, start 2026-11-13T14:52:03Z, declared 15:06:21Z, 15 minutes: `challenge_until` 2026-11-16T15:21:21Z |
+| Promo 1 (B) | [0xa5940395…2448](https://explorer-studio.genlayer.com/tx/0xa5940395364660f7c176cc8344a7b7b9bf2d97cae39a4c6c216c0f54e80d2448) | theiere 39.90 → 31.90, 20 %, start 2026-11-16T15:06:29Z, declared 15:06:39Z, 10 minutes: `challenge_until` 2026-11-16T15:16:39Z; pledge `locked_until` 15:21:21Z |
+| close_pledge during the periods (expected failure) | [0x8f97ef90…3564](https://explorer-studio.genlayer.com/tx/0x8f97ef90632c8956412343b53391f479d579ef6c77eaf56773415f38272d3564) | **ERROR** `[EXPECTED] a promo challenge period is open until 2026-11-16T15:21:21Z`; bond unchanged |
+| Challenge 0 (A), in the period | [0x9d61bf94…3278](https://explorer-studio.genlayer.com/tx/0x9d61bf94ea499b36b46284469fbe6970a6f786206dfbee779c9b93d2638d3278) | capture 20261113144011, stake 0.01, filed 15:07:21Z |
+| Resolve 0 (A) | [0x0d0a88ab…5bc0](https://explorer-studio.genlayer.com/tx/0x0d0a88abb71bcbf2a94f1a57b326d93a603254ef5515d9b07175618f82425bc0) | **UPHELD**: observed 29.90 EUR, was 39.90; `judged_ts` 20261113144011, `page_sha256` `dfdbee0b…7663` (v1); promo 0 DEBUNKED |
+| Challenge on B after its period (expected failure) | [0x16e95da1…4ce8](https://explorer-studio.genlayer.com/tx/0x16e95da1c8b21791a3d79620453a2ccb6223426b78a0ea6205ab049cfab44ce8) | **ERROR** `[EXPECTED] challenge period ended (2026-11-16T15:16:39Z)`; capture 20261113144032, no value attached |
+| Withdraw (timbre-b) | [0xa751c0c2…12db](https://explorer-studio.genlayer.com/tx/0xa751c0c2c5fdfa57fea8cff87e4b46e924d331b7df36658f5a1d460651e212db) | 0.11 GEN (stake 0.01 + payout 0.1) |
+| close_pledge after the periods | [0xc6bb4c80…85d4](https://explorer-studio.genlayer.com/tx/0xc6bb4c803574e3ae8948dccc92f5cca765929c6cd881143d98d154f9641585d4) | SUCCESS: 0.1 GEN credited to the merchant, pledge inactive (before `ends_at`, after `locked_until`) |
+| Withdraw (timbre-a) | [0xab0837c6…8b15](https://explorer-studio.genlayer.com/tx/0xab0837c673c10a5e8d217993b25f947d0fb5c4a991468fc6afa2d709aff58b15) | 0.1 GEN |
+
+Every receipt is MAJORITY_AGREE; the two expected failures end with execution ERROR and the
+exact `[EXPECTED]` message that the script's check predicted, every other one with SUCCESS.
+
+Reads after the periods (`promo`, `promos 0`, `window 1`):
+
+- promo 1 (B): `status` **CLOSED**, `challenge_until` 2026-11-16T15:16:39Z, no challenge; the
+  script's `window 1` reports `challenge_open_now: false`. No view returns LIVE for it.
+- promo 0 (A): `status` DEBUNKED (an upheld promo stays debunked after its period).
+
+Final state of the v1.2.0 contract: pledge 0 inactive, bond 0, reserved 0, `total_credits` 0,
+both credits withdrawn. Solvency: 0.2 bond + 0.01 stake = 0.11 (timbre-b) + 0.1 (timbre-a).
+
+The steps between the declarations (15:06Z) and the late challenge (20:27Z) were spaced by
+the operator's availability, not by the contract: the late challenge came about five hours
+after B's period had ended, and the close about five hours after A's.
+
 ## Verify a judged capture
 
 ```powershell

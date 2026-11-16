@@ -274,6 +274,19 @@ window check on redirects does not run: the post-start capture of case C was rea
 The fix (check the `memento-datetime` header of the capture actually returned) is in
 `v1.1.0`; see [docs/evidence.md](docs/evidence.md#case-c-a-finding).
 
+**v1.2.0: challenge periods and bond lock.** Contract
+[`0xb0530d4E845D79354Df3c0200272EFed6b2A1A25`](https://explorer-studio.genlayer.com/address/0xb0530d4E845D79354Df3c0200272EFed6b2A1A25)
+(`v1.2.0`, deployed with the 10-minute minimum for the demo;
+[details](docs/evidence.md#v120-challenge-periods-and-bond-lock-2026-11-16)):
+
+| Step | Obtained |
+|---|---|
+| `close_pledge` while the 15- and 10-minute periods are open | refused on-chain: `a promo challenge period is open until 2026-11-16T15:21:21Z` |
+| Case A challenged inside its period, then resolved | UPHELD (29.90 / 39.90 EUR), promo DEBUNKED |
+| Challenge on promo B after its period | refused on-chain: `challenge period ended (2026-11-16T15:16:39Z)` |
+| Promo B after its period | `CLOSED` on every view |
+| `close_pledge` after both periods, then withdrawals | bond credited to the merchant; 0.1 and 0.11 GEN withdrawn |
+
 **v1.1.0 replay.** Contract
 [`0x8FE01BfEeA15590B563b14A6357d0753ADAA9DD8`](https://explorer-studio.genlayer.com/address/0x8FE01BfEeA15590B563b14A6357d0753ADAA9DD8)
 (`v1.1.0`), same pages, captures and promo starts
